@@ -191,6 +191,43 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                 with col_header:
                     st.header("📋 Copie")
                 
+                with col_button:
+                    # Script JavaScript pour copier
+                    copy_button_top = """
+                    <script>
+                    function copyTextArea() {
+                        // Attendre que Streamlit ait rendu le textarea
+                        setTimeout(function() {
+                            const textArea = document.querySelector('textarea[aria-label="Copie-colle ceci dans ChatGPT:"]');
+                            if (textArea) {
+                                textArea.select();
+                                navigator.clipboard.writeText(textArea.value).then(function() {
+                                    alert('✅ Texte copié!');
+                                }, function(err) {
+                                    console.error('Erreur:', err);
+                                    alert('❌ Erreur lors de la copie');
+                                });
+                            } else {
+                                alert('❌ Zone de texte non trouvée');
+                            }
+                        }, 100);
+                    }
+                    </script>
+                    <button onclick="copyTextArea()" style="
+                        background-color: #FF4B4B;
+                        color: white;
+                        padding: 8px 16px;
+                        border: none;
+                        border-radius: 5px;
+                        cursor: pointer;
+                        font-size: 14px;
+                        width: 100%;
+                        font-weight: bold;
+                        margin-top: 8px;
+                    ">📋 Copier</button>
+                    """
+                    st.markdown(copy_button_top, unsafe_allow_html=True)
+                
                 prompt = """*"Agis comme un Consultant en Stratégie YouTube Senior. Je te donne des données brutes (commentaires). Ignore les compliments simples. Cherche les problèmes.
 
 Livrable attendu :
@@ -212,38 +249,6 @@ Livrable attendu :
                         copy_text += f"{i}. {comment['author']} ({comment['likes']} likes):\n{comment['text']}\n\n"
                 else:
                     copy_text += "\n[Aucun commentaire trouvé]"
-                
-                # BOUTON COPIER en haut - utilise le texte directement
-                with col_button:
-                    # Échapper correctement le texte pour JavaScript
-                    copy_text_escaped = copy_text.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$').replace('\n', '\\n').replace('\r', '\\r').replace('"', '\\"')
-                    
-                    copy_button_top = f"""
-                    <script>
-                    function copyToClipboardTop() {{
-                        const text = "{copy_text_escaped}";
-                        navigator.clipboard.writeText(text).then(function() {{
-                            alert('✅ Texte copié!');
-                        }}, function(err) {{
-                            console.error('Erreur:', err);
-                            alert('❌ Erreur lors de la copie');
-                        }});
-                    }}
-                    </script>
-                    <button onclick="copyToClipboardTop()" style="
-                        background-color: #FF4B4B;
-                        color: white;
-                        padding: 8px 16px;
-                        border: none;
-                        border-radius: 5px;
-                        cursor: pointer;
-                        font-size: 14px;
-                        width: 100%;
-                        font-weight: bold;
-                        margin-top: 8px;
-                    ">📋 Copier</button>
-                    """
-                    st.markdown(copy_button_top, unsafe_allow_html=True)
                 
                 # AFFICHER LA ZONE DE COPIE
                 st.text_area("Copie-colle ceci dans ChatGPT:", value=copy_text, height=600, key="copy_area")
