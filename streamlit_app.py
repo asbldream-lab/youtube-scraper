@@ -2,8 +2,6 @@ import streamlit as st
 from yt_dlp import YoutubeDL
 import json
 from datetime import datetime, timedelta
-from collections import Counter
-import re
 
 st.set_page_config(page_title="YouTube Scraper Pro", layout="wide")
 st.title("🚀 YouTube Keyword Research Tool PRO")
@@ -75,10 +73,6 @@ with col_d2:
 with col_d3:
     if st.sidebar.checkbox("Long (20+min)"):
         duration_filters.append("long")
-
-# ANALYSE IA
-st.sidebar.write("### 🎯 Analyse IA")
-use_ai_analysis = st.sidebar.checkbox("Activer l'analyse automatique des gaps", value=True)
 
 if selected_views:
     st.sidebar.success(f"✅ OK")
@@ -280,91 +274,27 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
             # LAYOUT
             left_col, right_col = st.columns([1, 2])
             
-            # === GAUCHE: SECTION COPIE + ANALYSE IA ===
+            # === GAUCHE: SECTION COPIE ===
             with left_col:
                 st.header("📋 Copie en bas")
-                
-                # ANALYSE IA - À LA DEMANDE
-                if use_ai_analysis and all_comments_list:
-                    st.subheader("🎯 Analyse IA des Gaps")
-                    
-                    if st.button("🤖 Lancer l'analyse IA", use_container_width=True):
-                        with st.spinner("🤖 Analyse en cours..."):
-                            # Préparer le texte des commentaires pour l'IA
-                            comments_text = "\n\n".join([
-                                f"{i+1}. {c['author']} ({c['likes']} likes): {c['text']}"
-                                for i, c in enumerate(all_comments_list[:30])  # RÉDUIT à 30
-                            ])
-                            
-                            ai_prompt = f"""Analyse ces commentaires YouTube et identifie en 150 mots MAX :
-
-1. **Top 3 Sujets** principaux
-2. **Top 3 Frustrations**
-3. **Gaps** : Ce qui manque
-4. **3 Idées de vidéos**
-
-Commentaires:
-{comments_text}
-
-Réponds de façon ULTRA concise."""
-                            
-                            try:
-                                # Appel API Claude
-                                import requests
-                                response = requests.post(
-                                    "https://api.anthropic.com/v1/messages",
-                                    headers={"Content-Type": "application/json"},
-                                    json={
-                                        "model": "claude-sonnet-4-20250514",
-                                        "max_tokens": 500,  # RÉDUIT
-                                        "messages": [{"role": "user", "content": ai_prompt}]
-                                    },
-                                    timeout=15  # RÉDUIT
-                                )
-                                
-                                if response.status_code == 200:
-                                    data = response.json()
-                                    ai_analysis = data['content'][0]['text']
-                                    st.success("✅ Analyse terminée!")
-                                    st.markdown(ai_analysis)
-                                else:
-                                    st.warning("⚠️ Analyse IA indisponible")
-                            except:
-                                st.warning("⚠️ Analyse IA indisponible")
-                    else:
-                        st.info("👆 Clique sur le bouton pour lancer l'analyse IA")
-                
-                st.divider()
-                
-                # NUAGE DE MOTS - SIMPLIFIÉ
-                st.subheader("☁️ Top 10 Mots")
-                
-                if all_comments_list:
-                    # Extraire tous les mots
-                    all_text = " ".join([c['text'] for c in all_comments_list])
-                    # Nettoyer
-                    words = re.findall(r'\b[a-zA-ZÀ-ÿ]{4,}\b', all_text.lower())
-                    # Mots courants à exclure
-                    stop_words = {'cette', 'pour', 'dans', 'avec', 'être', 'avoir', 'faire', 'dire',
-                                  'this', 'that', 'with', 'from', 'have', 'been', 'what', 'your'}
-                    words_filtered = [w for w in words if w not in stop_words]
-                    
-                    word_freq = Counter(words_filtered).most_common(10)  # RÉDUIT à 10
-                    
-                    # Affichage compact
-                    words_display = " | ".join([f"{word} ({count})" for word, count in word_freq])
-                    st.text(words_display)
                 
                 st.divider()
                 
                 # TEXTE À COPIER
-                prompt = f"""*"Agis comme un Consultant en Stratégie YouTube Senior. Je te donne des données brutes (commentaires). Ignore les compliments simples. Cherche les problèmes.
+                prompt = """Tu es un expert en analyse de données sociales et en stratégie de contenu vidéo. Ton but est d'analyser la liste de commentaires ci-dessous pour en extraire une stratégie éditoriale efficace.
 
-Livrable attendu :
-1. Le Top des Sujets : De quoi parle la majorité ?
-2. Le Mur des Lamentations : De quoi se plaignent-ils ? (Frustrations).
-3. Le "Gap" : Qu'est-ce qu'ils ont cherché dans la vidéo sans le trouver ? (Ce qui manque).
-4. Le Plan d'Attaque : 3 Angles de vidéos qui comblent ces trous."*"""
+Contraintes de réponse :
+* Chaque section doit avoir le titre indiqué.
+* Chaque réponse sous les titres doit faire maximum 2 phrases.
+* Le ton doit être direct, efficace et sans remplissage.
+
+Instructions d'analyse :
+1. Angle de réponse stratégique : Identifie l'approche globale à adopter pour répondre aux attentes ou aux frustrations des utilisateurs.
+2. Top 5 des idées récurrentes : Liste les 5 thèmes ou arguments qui reviennent le plus souvent (une ligne par idée).
+3. Sujets périphériques et opportunités : Identifie les sujets connexes mentionnés par l'audience qui pourraient faire l'objet d'une nouvelle vidéo (ex: si on parle de Cuba sous une vidéo sur le Venezuela).
+4. Éléments indispensables pour la vidéo : Liste les points précis, arguments ou questions auxquels tu dois absolument répondre dans le contenu.
+
+Voici les commentaires :"""
                 
                 copy_text = prompt + "\n\n" + "="*50 + "\n"
                 
