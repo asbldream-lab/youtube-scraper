@@ -25,7 +25,7 @@ keywords_list = [k.strip() for k in keywords_input.split('\n') if k.strip()]
 # LANGUE
 language = st.sidebar.selectbox(
     "🌍 Langue:",
-    ["Auto (toutes langues)", "Français", "Anglais"]
+    ["Auto (toutes langues)", "Français", "Anglais", "Espagnol"]
 )
 
 # VUES
@@ -123,6 +123,9 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                     search_query = f"ytsearch{search_limit}:{keyword}"
                 elif language == "Anglais":
                     ydl_opts_fast['extractor_args'] = {'youtube': {'lang': ['en']}}
+                    search_query = f"ytsearch{search_limit}:{keyword}"
+                elif language == "Espagnol":
+                    ydl_opts_fast['extractor_args'] = {'youtube': {'lang': ['es']}}
                     search_query = f"ytsearch{search_limit}:{keyword}"
                 else:
                     search_query = f"ytsearch{search_limit}:{keyword}"
@@ -239,7 +242,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                         'socket_timeout': 5,
                         'writesubtitles': True,
                         'writeautomaticsub': True,
-                        'subtitleslangs': ['fr', 'en'],
+                        'subtitleslangs': ['fr', 'en', 'es'],  # Ajout espagnol
                         'skip_download': True,
                         'ignoreerrors': True,
                     })
@@ -250,9 +253,9 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                     subtitles = info_subs.get('subtitles', {})
                     auto_subs = info_subs.get('automatic_captions', {})
                     
-                    # Essayer français puis anglais
+                    # Essayer français, anglais, espagnol
                     subtitle_data = None
-                    for lang in ['fr', 'en', 'fr-FR', 'en-US']:
+                    for lang in ['fr', 'en', 'es', 'fr-FR', 'en-US', 'es-ES']:
                         if lang in subtitles:
                             subtitle_data = subtitles[lang]
                             break
