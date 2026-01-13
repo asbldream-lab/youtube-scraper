@@ -186,7 +186,10 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
             
             # === GAUCHE: SECTION COPIE ===
             with left_col:
-                st.header("📋 Copie")
+                # Header avec bouton copier
+                col_header, col_button = st.columns([2, 1])
+                with col_header:
+                    st.header("📋 Copie")
                 
                 prompt = """*"Agis comme un Consultant en Stratégie YouTube Senior. Je te donne des données brutes (commentaires). Ignore les compliments simples. Cherche les problèmes.
 
@@ -210,34 +213,37 @@ Livrable attendu :
                 else:
                     copy_text += "\n[Aucun commentaire trouvé]"
                 
+                # BOUTON COPIER en haut
+                with col_button:
+                    # Utiliser un ID unique pour éviter les conflits
+                    copy_button_top = f"""
+                    <script>
+                    function copyToClipboardTop() {{
+                        const text = document.getElementById('copy_area').value;
+                        navigator.clipboard.writeText(text).then(function() {{
+                            alert('✅ Texte copié!');
+                        }}, function(err) {{
+                            alert('❌ Erreur lors de la copie');
+                        }});
+                    }}
+                    </script>
+                    <button onclick="copyToClipboardTop()" style="
+                        background-color: #FF4B4B;
+                        color: white;
+                        padding: 8px 16px;
+                        border: none;
+                        border-radius: 5px;
+                        cursor: pointer;
+                        font-size: 14px;
+                        width: 100%;
+                        font-weight: bold;
+                        margin-top: 8px;
+                    ">📋 Copier</button>
+                    """
+                    st.markdown(copy_button_top, unsafe_allow_html=True)
+                
                 # AFFICHER LA ZONE DE COPIE
                 st.text_area("Copie-colle ceci dans ChatGPT:", value=copy_text, height=600, key="copy_area")
-                
-                # BOUTON COPIER avec JavaScript
-                copy_button_html = f"""
-                <script>
-                function copyToClipboard() {{
-                    const text = `{copy_text.replace('`', '\\`').replace('$', '\\$')}`;
-                    navigator.clipboard.writeText(text).then(function() {{
-                        alert('✅ Texte copié dans le presse-papiers!');
-                    }}, function(err) {{
-                        alert('❌ Erreur lors de la copie');
-                    }});
-                }}
-                </script>
-                <button onclick="copyToClipboard()" style="
-                    background-color: #FF4B4B;
-                    color: white;
-                    padding: 10px 20px;
-                    border: none;
-                    border-radius: 5px;
-                    cursor: pointer;
-                    font-size: 16px;
-                    width: 100%;
-                    font-weight: bold;
-                ">📋 Copier le texte</button>
-                """
-                st.markdown(copy_button_html, unsafe_allow_html=True)
             
             # === DROITE: VIDÉOS ===
             with right_col:
