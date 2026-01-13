@@ -489,15 +489,32 @@ Voici les commentaires :"""
                     video_comments = [c for c in all_comments_list if c['video_id'] == video_id]
                     
                     with st.expander(f"Vidéo {idx}: {title} | 👁️ {views:,} | 📈 {engagement:.2f}% | 🔥 {virality_stars}"):
-                        st.write(f"**🔍 Mot-clé:** {keyword}")
-                        st.write(f"**📺 Canal:** {channel} ({subscribers:,} abonnés)")
-                        st.write(f"**👁️ Vues:** {views:,}")
-                        st.write(f"**👍 Likes:** {likes:,}")
-                        st.write(f"**📈 Engagement:** {engagement:.2f}%")
-                        st.write(f"**🔥 Viralité:** {virality_stars}")
-                        st.write(f"**⏱️ Durée:** {mins}min {secs}s")
-                        st.write(f"**📅 Publié:** {date_str}")
-                        st.write(f"**🔗** [Regarder](https://www.youtube.com/watch?v={video_id})")
+                        # AFFICHER LA THUMBNAIL
+                        thumbnail_url = video.get('thumbnail', '')
+                        if thumbnail_url:
+                            col_thumb, col_info = st.columns([1, 2])
+                            with col_thumb:
+                                st.image(thumbnail_url, caption="Miniature", use_container_width=True)
+                            with col_info:
+                                st.write(f"**🔍 Mot-clé:** {keyword}")
+                                st.write(f"**📺 Canal:** {channel} ({subscribers:,} abonnés)")
+                                st.write(f"**👁️ Vues:** {views:,}")
+                                st.write(f"**👍 Likes:** {likes:,}")
+                                st.write(f"**📈 Engagement:** {engagement:.2f}%")
+                                st.write(f"**🔥 Viralité:** {virality_stars}")
+                                st.write(f"**⏱️ Durée:** {mins}min {secs}s")
+                                st.write(f"**📅 Publié:** {date_str}")
+                                st.write(f"**🔗** [Regarder](https://www.youtube.com/watch?v={video_id})")
+                        else:
+                            st.write(f"**🔍 Mot-clé:** {keyword}")
+                            st.write(f"**📺 Canal:** {channel} ({subscribers:,} abonnés)")
+                            st.write(f"**👁️ Vues:** {views:,}")
+                            st.write(f"**👍 Likes:** {likes:,}")
+                            st.write(f"**📈 Engagement:** {engagement:.2f}%")
+                            st.write(f"**🔥 Viralité:** {virality_stars}")
+                            st.write(f"**⏱️ Durée:** {mins}min {secs}s")
+                            st.write(f"**📅 Publié:** {date_str}")
+                            st.write(f"**🔗** [Regarder](https://www.youtube.com/watch?v={video_id})")
                         
                         st.divider()
                         st.write("### 🎯 HOOK (Premières phrases)")
