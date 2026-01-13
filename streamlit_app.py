@@ -16,10 +16,13 @@ if 'search_history' not in st.session_state:
 st.sidebar.header("⚙️ Paramètres")
 
 # MULTI-MOTS-CLÉS
+st.sidebar.write("### 🔍 Mots-clés")
+st.sidebar.info("💡 **Recherche stricte avec guillemets** :\n- `guerre irak` → recherche normale\n- `\"guerre starlink\"` → TOUS les mots doivent être présents !")
+
 keywords_input = st.sidebar.text_area(
-    "🔍 Mots-clés (un par ligne):",
-    placeholder="guerre irak\nconflit moyen orient\ngéopolitique",
-    help="Entre plusieurs mots-clés, un par ligne"
+    "Entre un mot-clé par ligne :",
+    placeholder="guerre irak\n\"conflit starlink\"\ngéopolitique",
+    help="Mets des guillemets pour forcer la présence de TOUS les mots"
 )
 keywords_list = [k.strip() for k in keywords_input.split('\n') if k.strip()]
 
@@ -175,6 +178,27 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                         result = future.result()
                         if result:
                             videos.append(result)
+                
+                # FILTRAGE STRICT SI MOTS ENTRE GUILLEMETS
+                # Exemple: "guerre starlink" → il FAUT les 2 mots
+                if keyword.startswith('"') and keyword.endswith('"'):
+                    # Extraire les mots entre guillemets
+                    strict_words = keyword.strip('"').lower().split()
+                    
+                    videos_temp = []
+                    for video in videos:
+                        title = (video.get('title') or '').lower()
+                        description = (video.get('description') or '').lower()
+                        full_text = title + ' ' + description
+                        
+                        # Vérifier que TOUS les mots sont présents
+                        all_words_present = all(word in full_text for word in strict_words)
+                        
+                        if all_words_present:
+                            videos_temp.append(video)
+                    
+                    videos = videos_temp
+                    st.info(f"🔍 Recherche stricte \"{keyword.strip('\"')}\" : {len(videos)} vidéos contiennent TOUS les mots")
                 
                 # FILTRAGE STRICT PAR LANGUE
                 if language != "Auto (toutes langues)":
