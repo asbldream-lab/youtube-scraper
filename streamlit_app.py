@@ -108,7 +108,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
             
             progress_bar.progress(20)
             
-            # FILTRER
+            # FILTRER PAR VUES - Strict!
             videos_filtered = []
             for video in videos:
                 if video:  # Vérifier que la vidéo existe
@@ -118,13 +118,9 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                             videos_filtered.append(video)
                             break
             
-            # S'assurer d'avoir au moins 5 vidéos
-            if len(videos_filtered) < 5 and len(videos) > 0:
-                st.warning(f"⚠️ Seulement {len(videos_filtered)} vidéo(s) trouvée(s) avec les filtres de vues. Ajout de vidéos supplémentaires...")
-                # Ajouter des vidéos même si elles ne correspondent pas exactement aux critères
-                for video in videos:
-                    if video and video not in videos_filtered and len(videos_filtered) < 10:
-                        videos_filtered.append(video)
+            if len(videos_filtered) == 0:
+                st.error(f"❌ Aucune vidéo trouvée avec les filtres de vues sélectionnés. Essaye de sélectionner d'autres gammes de vues.")
+                st.stop()
             
             st.success(f"✅ {len(videos_filtered)} vidéo(s) trouvée(s)!")
             st.divider()
