@@ -2,6 +2,7 @@ import streamlit as st
 from yt_dlp import YoutubeDL
 import json
 from datetime import datetime, timedelta
+import requests
 
 st.set_page_config(page_title="YouTube Scraper Pro", layout="wide")
 st.title("🚀 YouTube Keyword Research Tool PRO")
@@ -216,8 +217,8 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
             st.success(f"✅ {len(all_videos_filtered)} vidéo(s) trouvée(s) pour {len(keywords_list)} mot(s)-clé(s)!")
             st.divider()
             
-            # RÉCUPÉRER COMMENTAIRES - OPTIMISÉ
-            status.text("💬 Récupération commentaires...")
+            # RÉCUPÉRER COMMENTAIRES + SOUS-TITRES
+            status.text("💬 Récupération commentaires + sous-titres...")
             progress_bar.progress(40)
             
             failed_videos = []
@@ -229,14 +230,71 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                 video_id = video['id']
                 video_title = video['title']
                 
+                # RÉCUPÉRER SOUS-TITRES (HOOK)
+                hook_text = ""
+                try:
+                    ydl_subs = YoutubeDL({
+                        'quiet': True,
+                        'no_warnings': True,
+                        'socket_timeout': 5,
+                        'writesubtitles': True,
+                        'writeautomaticsub': True,
+                        'subtitleslangs': ['fr', 'en'],
+                        'skip_download': True,
+                        'ignoreerrors': True,
+                    })
+                    
+                    info_subs = ydl_subs.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+                    
+                    # Chercher les sous-titres
+                    subtitles = info_subs.get('subtitles', {})
+                    auto_subs = info_subs.get('automatic_captions', {})
+                    
+                    # Essayer français puis anglais
+                    subtitle_data = None
+                    for lang in ['fr', 'en', 'fr-FR', 'en-US']:
+                        if lang in subtitles:
+                            subtitle_data = subtitles[lang]
+                            break
+                        elif lang in auto_subs:
+                            subtitle_data = auto_subs[lang]
+                            break
+                    
+                    # Extraire le texte des 30 premières secondes (hook)
+                    if subtitle_data:
+                        # Prendre le premier format (généralement json3)
+                        sub_url = subtitle_data[0]['url'] if subtitle_data else None
+                        if sub_url:
+                            response = requests.get(sub_url, timeout=5)
+                            if response.status_code == 200:
+                                try:
+                                    # Format json3
+                                    sub_json = json.loads(response.text)
+                                    events = sub_json.get('events', [])
+                                    hook_sentences = []
+                                    for event in events[:10]:  # ~30 premières secondes
+                                        if 'segs' in event:
+                                            text = ''.join([seg.get('utf8', '') for seg in event['segs']])
+                                            if text.strip():
+                                                hook_sentences.append(text.strip())
+                                    hook_text = ' '.join(hook_sentences[:5])  # 5 premières phrases max
+                                except:
+                                    pass
+                except:
+                    pass
+                
+                # Stocker le hook dans la vidéo
+                video['hook'] = hook_text if hook_text else "Sous-titres non disponibles"
+                
+                # RÉCUPÉRER COMMENTAIRES
                 try:
                     ydl_comments = YoutubeDL({
                         'quiet': True,
                         'no_warnings': True,
-                        'socket_timeout': 5,  # RÉDUIT pour vitesse
+                        'socket_timeout': 5,
                         'getcomments': True,
                         'ignoreerrors': True,
-                        'extractor_args': {'youtube': {'max_comments': ['20']}}  # RÉDUIT à 20
+                        'extractor_args': {'youtube': {'max_comments': ['20']}}
                     })
                     
                     info = ydl_comments.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
@@ -281,7 +339,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                 st.divider()
                 
                 # TEXTE À COPIER
-                prompt = """Tu es un expert en analyse de données sociales et en stratégie de contenu vidéo. Ton but est d'analyser la liste de commentaires ci-dessous pour en extraire une stratégie éditoriale efficace.
+                prompt = """Rôle : Tu es un expert en analyse de données sociales et en stratégie de contenu vidéo. Ton but est d'analyser les commentaires et les premières phrases des vidéos concurrentes pour en extraire une stratégie éditoriale unique.
 
 Contraintes de réponse :
 * Chaque section doit avoir le titre indiqué.
@@ -290,9 +348,10 @@ Contraintes de réponse :
 
 Instructions d'analyse :
 1. Angle de réponse stratégique : Identifie l'approche globale à adopter pour répondre aux attentes ou aux frustrations des utilisateurs.
-2. Top 5 des idées récurrentes : Liste les 5 thèmes ou arguments qui reviennent le plus souvent (une ligne par idée).
-3. Sujets périphériques et opportunités : Identifie les sujets connexes mentionnés par l'audience qui pourraient faire l'objet d'une nouvelle vidéo (ex: si on parle de Cuba sous une vidéo sur le Venezuela).
-4. Éléments indispensables pour la vidéo : Liste les points précis, arguments ou questions auxquels tu dois absolument répondre dans le contenu.
+2. Top 5 des idées récurrentes : Liste les 5 thèmes ou arguments qui reviennent le plus souvent dans les commentaires.
+3. Sujets périphériques et opportunités : Propose des sujets connexes mentionnés par l'audience pour de futures vidéos.
+4. Éléments indispensables pour la vidéo : Liste les points précis ou questions auxquels tu dois absolument répondre.
+5. Analyse des accroches et nouveaux Hooks : Analyse la structure des phrases de début fournies pour proposer 3 nouveaux hooks originaux et percutants sans jamais copier les originaux.
 
 Voici les commentaires :"""
                 
@@ -306,6 +365,16 @@ Voici les commentaires :"""
                     
                     for i, comment in enumerate(all_comments_list, 1):
                         copy_text += f"{i}. {comment['author']} ({comment['likes']} likes) [Mot-clé: {comment['keyword']}]:\n{comment['text']}\n\n"
+                    
+                    # AJOUTER LES HOOKS À LA FIN
+                    copy_text += "\n" + "="*50 + "\n"
+                    copy_text += "PHRASES - HOOK (premières phrases des vidéos):\n"
+                    copy_text += "="*50 + "\n\n"
+                    
+                    for idx, video in enumerate(all_videos_filtered, 1):
+                        hook = video.get('hook', 'Non disponible')
+                        copy_text += f"Vidéo {idx} - {video.get('title', 'Sans titre')[:60]}...\n"
+                        copy_text += f"Hook: {hook}\n\n"
                 else:
                     copy_text += "\n[Aucun commentaire trouvé]"
                 
@@ -324,9 +393,25 @@ Voici les commentaires :"""
                     video_id = video.get('id', '')
                     keyword = video.get('search_keyword', '')
                     upload_date = video.get('upload_date', '')
+                    subscribers = video.get('channel_follower_count', 0) or 0
+                    hook = video.get('hook', 'Non disponible')
                     
                     # Calculer engagement
                     engagement = (likes / views * 100) if views > 0 else 0
+                    
+                    # CALCULER SCORE DE VIRALITÉ
+                    virality_stars = ""
+                    if subscribers > 0:
+                        if views >= subscribers:
+                            virality_stars = "⭐⭐⭐"
+                        elif views >= subscribers * 0.5:
+                            virality_stars = "⭐⭐"
+                        elif views >= subscribers * 0.2:
+                            virality_stars = "⭐"
+                        else:
+                            virality_stars = "—"
+                    else:
+                        virality_stars = "N/A"
                     
                     # Formater durée
                     mins = duration // 60
@@ -343,15 +428,21 @@ Voici les commentaires :"""
                     
                     video_comments = [c for c in all_comments_list if c['video_id'] == video_id]
                     
-                    with st.expander(f"Vidéo {idx}: {title} | 👁️ {views:,} | 📈 {engagement:.2f}%"):
+                    with st.expander(f"Vidéo {idx}: {title} | 👁️ {views:,} | 📈 {engagement:.2f}% | 🔥 {virality_stars}"):
                         st.write(f"**🔍 Mot-clé:** {keyword}")
-                        st.write(f"**📺 Canal:** {channel}")
+                        st.write(f"**📺 Canal:** {channel} ({subscribers:,} abonnés)")
                         st.write(f"**👁️ Vues:** {views:,}")
                         st.write(f"**👍 Likes:** {likes:,}")
                         st.write(f"**📈 Engagement:** {engagement:.2f}%")
+                        st.write(f"**🔥 Viralité:** {virality_stars}")
                         st.write(f"**⏱️ Durée:** {mins}min {secs}s")
                         st.write(f"**📅 Publié:** {date_str}")
                         st.write(f"**🔗** [Regarder](https://www.youtube.com/watch?v={video_id})")
+                        
+                        st.divider()
+                        st.write("### 🎯 HOOK (Premières phrases)")
+                        st.info(hook)
+                        
                         st.divider()
                         st.write("### 💬 Top 20 Commentaires (par likes)")
                         
