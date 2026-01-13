@@ -63,16 +63,47 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                 'socket_timeout': 15
             }
             
-            # Ajout du filtre de langue si nécessaire
-            search_query = f"ytsearch100:{keyword}"
+            # Configuration de la langue pour YouTube
             if language == "Français":
-                search_query += " lang:fr"
+                ydl_opts['extractor_args'] = {'youtube': {'lang': ['fr']}}
+                search_query = f"ytsearch100:{keyword}"
             elif language == "Anglais":
-                search_query += " lang:en"
+                ydl_opts['extractor_args'] = {'youtube': {'lang': ['en']}}
+                search_query = f"ytsearch100:{keyword}"
+            else:  # Auto
+                search_query = f"ytsearch100:{keyword}"
             
             with YoutubeDL(ydl_opts) as ydl:
                 results = ydl.extract_info(search_query, download=False)
                 videos = results.get('entries', [])
+            
+            # Filtrage supplémentaire par langue si nécessaire
+            if language != "Auto (toutes langues)":
+                videos_temp = []
+                target_lang = 'fr' if language == "Français" else 'en'
+                
+                for video in videos:
+                    if video:
+                        # Vérifier la langue de la vidéo
+                        video_lang = video.get('language', '').lower()
+                        uploader = video.get('uploader', '').lower()
+                        title = video.get('title', '').lower()
+                        
+                        # Critères de filtrage par langue
+                        if target_lang == 'fr':
+                            # Pour le français, chercher des indices
+                            if video_lang == 'fr' or any(word in title + uploader for word in ['fr', 'français', 'france']):
+                                videos_temp.append(video)
+                        elif target_lang == 'en':
+                            # Pour l'anglais
+                            if video_lang in ['en', 'en-us', 'en-gb'] or video_lang == '' or video_lang is None:
+                                videos_temp.append(video)
+                
+                # Si pas assez de résultats filtrés, garder les résultats originaux
+                if len(videos_temp) >= 10:
+                    videos = videos_temp
+                else:
+                    st.warning(f"⚠️ Peu de vidéos en {language} trouvées, affichage de tous les résultats")
             
             progress_bar.progress(20)
             
