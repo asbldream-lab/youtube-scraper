@@ -1,6 +1,5 @@
 import streamlit as st
 from yt_dlp import YoutubeDL
-import base64
 
 st.set_page_config(page_title="YouTube Scraper", layout="wide")
 st.title("🎬 YouTube Keyword Research Tool")
@@ -56,60 +55,78 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
         status.text("🔍 Recherche vidéos...")
         
         try:
-            # RECHERCHE - Augmentation à 300 résultats pour avoir plus de choix
+            # RECHERCHE YouTube
             ydl_opts = {
                 'quiet': True, 
                 'no_warnings': True, 
-                'extract_flat': 'in_playlist',
-                'socket_timeout': 15
+                'socket_timeout': 20
+                # PAS de 'extract_flat' pour avoir les vues !
             }
+            
+            # Nombre de résultats selon la langue
+            search_limit = 50  # Réduit pour la rapidité
             
             # Configuration de la langue pour YouTube
             if language == "Français":
                 ydl_opts['extractor_args'] = {'youtube': {'lang': ['fr']}}
-                search_query = f"ytsearch300:{keyword}"
+                search_query = f"ytsearch{search_limit}:{keyword}"
             elif language == "Anglais":
                 ydl_opts['extractor_args'] = {'youtube': {'lang': ['en']}}
-                search_query = f"ytsearch300:{keyword}"
+                search_query = f"ytsearch{search_limit}:{keyword}"
             else:  # Auto
-                search_query = f"ytsearch300:{keyword}"
+                search_query = f"ytsearch{search_limit}:{keyword}"
+            
+            status.text("🔍 Recherche et extraction des métadonnées...")
             
             with YoutubeDL(ydl_opts) as ydl:
                 results = ydl.extract_info(search_query, download=False)
                 videos = results.get('entries', [])
             
+            # Filtrer les vidéos None
+            videos = [v for v in videos if v is not None]
+            
             st.info(f"🔍 {len(videos)} vidéos trouvées sur YouTube")
             
-            # Filtrage LÉGER par langue si nécessaire (on garde presque tout)
+            # Debug : afficher combien ont des vues
+            videos_with_views = [v for v in videos if v.get('view_count', 0)]
+            st.info(f"📊 {len(videos_with_views)} vidéos avec info de vues")
+            
+            # Pour le français ou Auto, on garde TOUTES les vidéos
+            # Pour l'anglais, on filtre légèrement
             if language == "Anglais":
-                # Pour l'anglais, on filtre seulement si clairement français
                 videos_temp = []
                 for video in videos:
-                    if video:
-                        video_lang = video.get('language', '').lower()
-                        # Garder si pas explicitement français
-                        if video_lang != 'fr':
-                            videos_temp.append(video)
+                    video_lang = video.get('language', '').lower()
+                    if video_lang != 'fr':
+                        videos_temp.append(video)
                 
-                if len(videos_temp) >= 10:
+                if len(videos_temp) >= 5:
                     videos = videos_temp
                     st.info(f"🌍 {len(videos)} vidéos après filtre langue")
-            # Pour le français ou Auto, on garde TOUTES les vidéos
             
             progress_bar.progress(20)
             
             # FILTRER PAR VUES - Strict!
             videos_filtered = []
+            debug_info = []  # Pour voir ce qui se passe
+            
             for video in videos:
-                if video:  # Vérifier que la vidéo existe
-                    views = video.get('view_count', 0) or 0
-                    for min_v, max_v, _ in selected_views:
-                        if min_v <= views <= max_v:
-                            videos_filtered.append(video)
-                            break
+                views = video.get('view_count', 0) or 0
+                debug_info.append(f"{video.get('title', 'Sans titre')[:50]}... = {views:,} vues")
+                
+                for min_v, max_v, label in selected_views:
+                    if min_v <= views <= max_v:
+                        videos_filtered.append(video)
+                        break
+            
+            # Afficher quelques exemples pour debug
+            with st.expander("🔍 Debug : Vues des premières vidéos trouvées"):
+                for info in debug_info[:10]:
+                    st.text(info)
             
             if len(videos_filtered) == 0:
-                st.error(f"❌ Aucune vidéo trouvée avec les filtres de vues sélectionnés. Essaye de sélectionner d'autres gammes de vues.")
+                st.error(f"❌ Aucune vidéo trouvée avec les filtres de vues sélectionnés.")
+                st.warning("💡 Essaye de sélectionner d'autres gammes de vues ou change le mot-clé")
                 st.stop()
             
             st.success(f"✅ {len(videos_filtered)} vidéo(s) trouvée(s)!")
