@@ -5,12 +5,16 @@ from datetime import datetime, timedelta
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Détection de langue robuste
+try:
+    from langdetect import detect, LangDetectException
+    LANGDETECT_AVAILABLE = True
+except ImportError:
+    LANGDETECT_AVAILABLE = False
+    st.warning("⚠️ Pour un filtrage de langue optimal, installez langdetect: `pip install langdetect`")
+
 st.set_page_config(page_title="YouTube Scraper Pro", layout="wide")
 st.title("🚀 YouTube Keyword Research Tool PRO")
-
-# Initialisation session state
-if 'search_history' not in st.session_state:
-    st.session_state.search_history = []
 
 # ============ SIDEBAR ============
 st.sidebar.header("⚙️ Paramètres")
@@ -200,62 +204,106 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                     videos = videos_temp
                     st.info(f"🔍 Recherche stricte \"{keyword.strip('\"')}\" : {len(videos)} vidéos contiennent TOUS les mots")
                 
-                # FILTRAGE STRICT PAR LANGUE
+                # FILTRAGE STRICT PAR LANGUE - MÉTHODE ROBUSTE
                 if language != "Auto (toutes langues)":
                     videos_temp = []
                     
+                    # Mapping langue sélectionnée → codes ISO
+                    lang_map = {
+                        "Français": ["fr"],
+                        "Anglais": ["en"],
+                        "Espagnol": ["es"]
+                    }
+                    target_langs = lang_map.get(language, [])
+                    
                     for video in videos:
+                        keep_video = False
+                        
+                        # MÉTHODE 1 : Champ language de YouTube (priorité)
                         video_lang = (video.get('language') or '').lower()
-                        title = (video.get('title') or '').lower()
-                        description = (video.get('description') or '').lower()
-                        uploader = (video.get('uploader') or '').lower()
+                        if video_lang:
+                            # Extraire le code langue (ex: "fr-FR" → "fr")
+                            lang_code = video_lang.split('-')[0]
+                            if lang_code in target_langs:
+                                keep_video = True
                         
-                        # Détection stricte par langue
-                        if language == "Français":
-                            # Indicateurs français
-                            french_indicators = ['à', 'é', 'è', 'ê', 'ç', 'où', 'français', 'france']
-                            is_french = (
-                                video_lang in ['fr', 'fr-fr', 'fr-ca'] or
-                                any(ind in title + description + uploader for ind in french_indicators) or
-                                'fr' in uploader
-                            )
-                            # Exclure clairement anglais/espagnol
-                            is_english = video_lang in ['en', 'en-us', 'en-gb'] or ' the ' in title or ' and ' in title
-                            is_spanish = video_lang in ['es', 'es-es', 'es-mx'] or '¿' in title or '¡' in title
+                        # MÉTHODE 2 : Détection automatique avec langdetect (si disponible)
+                        if not keep_video and LANGDETECT_AVAILABLE:
+                            title = (video.get('title') or '')
+                            description = (video.get('description') or '')
                             
-                            if is_french and not is_english and not is_spanish:
-                                videos_temp.append(video)
+                            # Combiner titre + début description pour avoir assez de texte
+                            text_to_analyze = f"{title} {description[:500]}"
+                            
+                            if len(text_to_analyze.strip()) > 20:  # Au moins 20 caractères
+                                try:
+                                    detected_lang = detect(text_to_analyze)
+                                    if detected_lang in target_langs:
+                                        keep_video = True
+                                except LangDetectException:
+                                    # Si détection échoue, fallback sur heuristiques
+                                    pass
                         
-                        elif language == "Anglais":
-                            # Indicateurs anglais
-                            is_english = (
-                                video_lang in ['en', 'en-us', 'en-gb'] or
-                                ' the ' in title or ' and ' in title or ' is ' in title
-                            )
-                            # Exclure français/espagnol
-                            is_french = video_lang in ['fr', 'fr-fr'] or 'français' in title
-                            is_spanish = video_lang in ['es', 'es-es'] or '¿' in title or '¡' in title
+                        # MÉTHODE 3 : Heuristiques de backup (si langdetect pas dispo ou échoue)
+                        if not keep_video and not LANGDETECT_AVAILABLE:
+                            title = (video.get('title') or '').lower()
+                            description = (video.get('description') or '').lower()
+                            full_text = title + ' ' + description
                             
-                            if is_english and not is_french and not is_spanish:
-                                videos_temp.append(video)
+                            if language == "Français":
+                                # Indicateurs français forts
+                                french_strong = ['français', 'france', ' le ', ' la ', ' les ', ' un ', ' une ', ' des ', 
+                                               ' de ', ' du ', ' ce ', ' cette ', ' je ', ' tu ', ' nous ', ' vous ']
+                                french_chars = ['à', 'é', 'è', 'ê', 'ç', 'û', 'î', 'ô']
+                                
+                                has_french_words = sum(1 for w in french_strong if w in full_text) >= 2
+                                has_french_chars = any(c in full_text for c in french_chars)
+                                
+                                # Exclure anglais/espagnol
+                                has_english = ' the ' in title or ' and ' in title or ' is ' in title
+                                has_spanish = '¿' in full_text or '¡' in full_text
+                                
+                                if (has_french_words or has_french_chars) and not has_english and not has_spanish:
+                                    keep_video = True
+                            
+                            elif language == "Anglais":
+                                # Indicateurs anglais forts
+                                english_strong = [' the ', ' and ', ' is ', ' are ', ' was ', ' were ', 
+                                                ' have ', ' has ', ' will ', ' would ', ' this ', ' that ']
+                                
+                                has_english_words = sum(1 for w in english_strong if w in full_text) >= 2
+                                
+                                # Exclure français/espagnol
+                                has_french = any(c in full_text for c in ['à', 'é', 'è', 'ê', 'ç'])
+                                has_spanish = '¿' in full_text or '¡' in full_text
+                                
+                                if has_english_words and not has_french and not has_spanish:
+                                    keep_video = True
+                            
+                            elif language == "Espagnol":
+                                # Indicateurs espagnol forts
+                                spanish_strong = [' el ', ' la ', ' los ', ' las ', ' un ', ' una ', ' de ', 
+                                                ' del ', ' que ', ' es ', ' está ', ' son ']
+                                spanish_chars = ['¿', '¡', 'ñ', 'á', 'é', 'í', 'ó', 'ú']
+                                
+                                has_spanish_words = sum(1 for w in spanish_strong if w in full_text) >= 2
+                                has_spanish_chars = any(c in full_text for c in spanish_chars)
+                                
+                                # Exclure anglais/français
+                                has_english = ' the ' in title or ' and ' in title
+                                has_french = 'français' in full_text
+                                
+                                if (has_spanish_words or has_spanish_chars) and not has_english and not has_french:
+                                    keep_video = True
                         
-                        elif language == "Espagnol":
-                            # Indicateurs espagnol
-                            spanish_indicators = ['¿', '¡', 'español', 'méxico', 'latinoamérica']
-                            is_spanish = (
-                                video_lang in ['es', 'es-es', 'es-mx', 'es-ar', 'es-co', 'es-cl'] or
-                                any(ind in title + description + uploader for ind in spanish_indicators) or
-                                'ñ' in title or 'ñ' in uploader
-                            )
-                            # Exclure clairement anglais/français
-                            is_english = video_lang in ['en', 'en-us', 'en-gb'] or ' the ' in title
-                            is_french = video_lang in ['fr', 'fr-fr'] or 'français' in title
-                            
-                            if is_spanish and not is_english and not is_french:
-                                videos_temp.append(video)
+                        if keep_video:
+                            videos_temp.append(video)
                     
                     videos = videos_temp
-                    st.info(f"🌍 {len(videos)} vidéos en {language} après filtrage strict")
+                    if LANGDETECT_AVAILABLE:
+                        st.info(f"🌍 {len(videos)} vidéos en {language} (détection automatique)")
+                    else:
+                        st.info(f"🌍 {len(videos)} vidéos en {language} (heuristiques)")
                 
                 progress_bar.progress(20)
                 
@@ -328,16 +376,16 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                     'failed': False
                 }
                 
-                # RÉCUPÉRER SOUS-TITRES (HOOK)
+                # RÉCUPÉRER SOUS-TITRES (HOOK) - VERSION AGRESSIVE
                 hook_text = ""
                 try:
                     ydl_subs = YoutubeDL({
                         'quiet': True,
                         'no_warnings': True,
-                        'socket_timeout': 5,
+                        'socket_timeout': 8,
                         'writesubtitles': True,
                         'writeautomaticsub': True,
-                        'subtitleslangs': ['fr', 'en', 'es'],
+                        'allsubtitles': True,  # NOUVEAU : Récupère TOUTES les langues
                         'skip_download': True,
                         'ignoreerrors': True,
                     })
@@ -347,34 +395,91 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                     subtitles = info_subs.get('subtitles', {})
                     auto_subs = info_subs.get('automatic_captions', {})
                     
+                    # STRATÉGIE AGRESSIVE : Essayer TOUTES les langues disponibles
                     subtitle_data = None
-                    for lang in ['fr', 'en', 'es', 'fr-FR', 'en-US', 'es-ES']:
-                        if lang in subtitles:
-                            subtitle_data = subtitles[lang]
-                            break
-                        elif lang in auto_subs:
-                            subtitle_data = auto_subs[lang]
-                            break
                     
-                    if subtitle_data:
-                        sub_url = subtitle_data[0]['url'] if subtitle_data else None
+                    # 1. Priorité : sous-titres manuels
+                    if subtitles:
+                        for lang in subtitles.keys():
+                            if subtitles[lang]:
+                                subtitle_data = subtitles[lang]
+                                break
+                    
+                    # 2. Fallback : sous-titres automatiques
+                    if not subtitle_data and auto_subs:
+                        # Priorité aux langues principales
+                        priority_langs = ['fr', 'en', 'es', 'fr-FR', 'en-US', 'es-ES', 
+                                        'en-GB', 'pt', 'de', 'it', 'ru', 'ar']
+                        
+                        for lang in priority_langs:
+                            if lang in auto_subs and auto_subs[lang]:
+                                subtitle_data = auto_subs[lang]
+                                break
+                        
+                        # Si toujours rien, prendre la première langue dispo
+                        if not subtitle_data:
+                            for lang in auto_subs.keys():
+                                if auto_subs[lang]:
+                                    subtitle_data = auto_subs[lang]
+                                    break
+                    
+                    # Extraire le texte des sous-titres
+                    if subtitle_data and len(subtitle_data) > 0:
+                        sub_url = subtitle_data[0].get('url')
+                        
                         if sub_url:
-                            response = requests.get(sub_url, timeout=5)
+                            response = requests.get(sub_url, timeout=8)
                             if response.status_code == 200:
-                                try:
-                                    sub_json = json.loads(response.text)
-                                    events = sub_json.get('events', [])
-                                    hook_sentences = []
-                                    for event in events[:10]:
-                                        if 'segs' in event:
-                                            text = ''.join([seg.get('utf8', '') for seg in event['segs']])
-                                            if text.strip():
-                                                hook_sentences.append(text.strip())
-                                    hook_text = ' '.join(hook_sentences[:5])
-                                except:
-                                    pass
-                except:
-                    pass
+                                content = response.text
+                                
+                                # Détecter le format et parser en conséquence
+                                hook_sentences = []
+                                
+                                # Format JSON3 (YouTube)
+                                if content.strip().startswith('{'):
+                                    try:
+                                        sub_json = json.loads(content)
+                                        events = sub_json.get('events', [])
+                                        
+                                        for event in events[:15]:  # Plus d'événements
+                                            if 'segs' in event:
+                                                text = ''.join([seg.get('utf8', '') for seg in event['segs']])
+                                                if text.strip():
+                                                    hook_sentences.append(text.strip())
+                                        
+                                        hook_text = ' '.join(hook_sentences[:8])  # Plus de phrases
+                                    except:
+                                        pass
+                                
+                                # Format VTT
+                                elif 'WEBVTT' in content:
+                                    lines = content.split('\n')
+                                    for line in lines[:50]:  # Premières 50 lignes
+                                        line = line.strip()
+                                        # Ignorer les timestamps et lignes vides
+                                        if line and '-->' not in line and not line.startswith('WEBVTT') and not line.isdigit():
+                                            if len(line) > 10:  # Au moins 10 caractères
+                                                hook_sentences.append(line)
+                                                if len(hook_sentences) >= 8:
+                                                    break
+                                    
+                                    hook_text = ' '.join(hook_sentences)
+                                
+                                # Format SRT ou autre
+                                else:
+                                    lines = content.split('\n')
+                                    for line in lines[:50]:
+                                        line = line.strip()
+                                        if line and '-->' not in line and not line.isdigit():
+                                            if len(line) > 10:
+                                                hook_sentences.append(line)
+                                                if len(hook_sentences) >= 8:
+                                                    break
+                                    
+                                    hook_text = ' '.join(hook_sentences)
+                except Exception as e:
+                    # En cas d'erreur, on note le type d'erreur
+                    hook_text = f"Erreur récupération: {type(e).__name__}"
                 
                 result['hook'] = hook_text if hook_text else "Sous-titres non disponibles"
                 
@@ -435,15 +540,6 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                         failed_videos.append(result['video']['title'])
             
             progress_bar.progress(90)
-            
-            # SAUVEGARDER DANS HISTORIQUE
-            history_entry = {
-                'date': datetime.now().strftime('%Y-%m-%d %H:%M'),
-                'keywords': keywords_list,
-                'videos_found': len(all_videos_filtered),
-                'comments_found': len(all_comments_list)
-            }
-            st.session_state.search_history.append(history_entry)
             
             # LAYOUT
             left_col, right_col = st.columns([1, 2])
@@ -578,53 +674,43 @@ Voici les commentaires :"""
                             st.caption(f"👁️ {views:,} | 📈 {engagement:.1f}% | ⏱️ {mins}:{secs:02d}")
                             st.caption(f"📺 {channel[:30]}...")
                             
-                            # Bouton pour voir détails
-                            if st.button(f"Voir détails", key=f"btn_{video_id}", use_container_width=True):
-                                st.session_state[f'show_{video_id}'] = True
-                            
-                            # Afficher détails si bouton cliqué
-                            if st.session_state.get(f'show_{video_id}', False):
-                                with st.expander("📋 Détails complets", expanded=True):
-                                    st.write(f"**🔍 Mot-clé:** {keyword}")
-                                    st.write(f"**📺 Canal:** {channel} ({subscribers:,} abonnés)")
-                                    st.write(f"**👁️ Vues:** {views:,}")
-                                    st.write(f"**👍 Likes:** {likes:,}")
-                                    st.write(f"**📈 Engagement:** {engagement:.2f}%")
-                                    st.write(f"**🔥 Viralité:** {virality_stars}")
-                                    st.write(f"**⏱️ Durée:** {mins}min {secs}s")
-                                    
-                                    # Formater date
-                                    if upload_date:
-                                        try:
-                                            date_obj = datetime.strptime(upload_date, '%Y%m%d')
-                                            date_str = date_obj.strftime('%d/%m/%Y')
-                                            st.write(f"**📅 Publié:** {date_str}")
-                                        except:
-                                            pass
-                                    
-                                    st.write(f"**🔗** [Regarder](https://www.youtube.com/watch?v={video_id})")
-                                    
-                                    st.divider()
-                                    st.write("### 🎯 HOOK (Premières phrases)")
-                                    st.info(hook)
-                                    
-                                    st.divider()
-                                    st.write("### 💬 Top 20 Commentaires (par likes)")
-                                    
-                                    video_comments = [c for c in all_comments_list if c['video_id'] == video_id]
-                                    
-                                    if video_comments:
-                                        for i, comment in enumerate(video_comments, 1):
-                                            st.write(f"**{i}. {comment['author']}** 👍 {comment['likes']}")
-                                            st.write(f"> {comment['text']}")
-                                            st.write("")
-                                    else:
-                                        st.info("⚠️ Aucun commentaire disponible")
-                                    
-                                    # Bouton pour fermer
-                                    if st.button("Fermer", key=f"close_{video_id}"):
-                                        st.session_state[f'show_{video_id}'] = False
-                                        st.rerun()
+                            # DÉTAILS EN EXPANDER (clic direct)
+                            with st.expander("📋 Voir détails"):
+                                st.write(f"**🔍 Mot-clé:** {keyword}")
+                                st.write(f"**📺 Canal:** {channel} ({subscribers:,} abonnés)")
+                                st.write(f"**👁️ Vues:** {views:,}")
+                                st.write(f"**👍 Likes:** {likes:,}")
+                                st.write(f"**📈 Engagement:** {engagement:.2f}%")
+                                st.write(f"**🔥 Viralité:** {virality_stars}")
+                                st.write(f"**⏱️ Durée:** {mins}min {secs}s")
+                                
+                                # Formater date
+                                if upload_date:
+                                    try:
+                                        date_obj = datetime.strptime(upload_date, '%Y%m%d')
+                                        date_str = date_obj.strftime('%d/%m/%Y')
+                                        st.write(f"**📅 Publié:** {date_str}")
+                                    except:
+                                        pass
+                                
+                                st.write(f"**🔗** [Regarder sur YouTube](https://www.youtube.com/watch?v={video_id})")
+                                
+                                st.divider()
+                                st.write("### 🎯 HOOK (Premières phrases)")
+                                st.info(hook)
+                                
+                                st.divider()
+                                st.write("### 💬 Top 20 Commentaires (par likes)")
+                                
+                                video_comments = [c for c in all_comments_list if c['video_id'] == video_id]
+                                
+                                if video_comments:
+                                    for i, comment in enumerate(video_comments, 1):
+                                        st.write(f"**{i}. {comment['author']}** 👍 {comment['likes']}")
+                                        st.write(f"> {comment['text']}")
+                                        st.write("")
+                                else:
+                                    st.info("⚠️ Aucun commentaire disponible")
                     
                     st.divider()
             
@@ -634,12 +720,3 @@ Voici les commentaires :"""
         except Exception as e:
             st.error(f"❌ Erreur: {str(e)}")
             st.exception(e)
-
-# ============ HISTORIQUE ============
-if st.session_state.search_history:
-    with st.expander("📚 Historique des recherches"):
-        for i, entry in enumerate(reversed(st.session_state.search_history[-10:]), 1):
-            st.write(f"**{i}. {entry['date']}**")
-            st.write(f"   🔍 Mots-clés: {', '.join(entry['keywords'])}")
-            st.write(f"   📹 {entry['videos_found']} vidéos | 💬 {entry['comments_found']} commentaires")
-            st.divider()
