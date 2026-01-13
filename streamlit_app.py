@@ -5,24 +5,163 @@ from datetime import datetime, timedelta
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-st.set_page_config(page_title="YouTube Scraper Pro", layout="wide")
+# =============================
+# ✅ DÉTECTION LANGUE ROBUSTE (Lingua > langdetect)
+# =============================
+import re
+from collections import defaultdict
 
-# Détection de langue robuste
 try:
-    from langdetect import detect, detect_langs, LangDetectException
-    # Test rapide pour s'assurer que ça fonctionne
-    test_result = detect("This is a test")
-    LANGDETECT_AVAILABLE = True
-except (ImportError, Exception):
-    LANGDETECT_AVAILABLE = False
+    from lingua import Language, LanguageDetectorBuilder
+    LINGUA_AVAILABLE = True
+    DETECTOR = LanguageDetectorBuilder.from_languages(
+        Language.FRENCH, Language.ENGLISH, Language.SPANISH
+    ).build()
+except Exception:
+    LINGUA_AVAILABLE = False
+    DETECTOR = None
 
+st.set_page_config(page_title="YouTube Scraper Pro", layout="wide")
 st.title("🚀 YouTube Keyword Research Tool PRO")
 
-# Avertissement si langdetect pas dispo
-if not LANGDETECT_AVAILABLE:
-    st.error("🚨 **langdetect n'est PAS installé !** Le filtrage par langue sera très limité. Installe-le: `pip install langdetect`")
+if not LINGUA_AVAILABLE:
+    st.error("🚨 **Lingua n'est PAS installé !** Installe-le : `pip install lingua-language-detector`")
 
+# =============================
+# 🧠 Outils langue
+# =============================
+def clean_text(s: str) -> str:
+    if not s:
+        return ""
+    s = s.lower()
+    s = re.sub(r"http\S+|www\.\S+", " ", s)          # URLs
+    s = re.sub(r"#\w+", " ", s)                     # hashtags
+    s = re.sub(r"@\w+", " ", s)                     # mentions
+    s = re.sub(r"[\W_]+", " ", s, flags=re.UNICODE) # ponctuation/emojis -> espaces
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+def lingua_guess(text: str):
+    """Retourne ('fr'/'en'/'es'/None, confidence 0..1)"""
+    if not LINGUA_AVAILABLE or not text or len(text) < 40:
+        return (None, 0.0)
+    try:
+        res = DETECTOR.compute_language_confidence_values(text)
+        if not res:
+            return (None, 0.0)
+        top = res[0]
+        lang = top.language
+        conf = float(top.value)
+        if lang == Language.FRENCH:
+            return ("fr", conf)
+        if lang == Language.ENGLISH:
+            return ("en", conf)
+        if lang == Language.SPANISH:
+            return ("es", conf)
+        return (None, 0.0)
+    except Exception:
+        return (None, 0.0)
+
+def concat_top_comments(video, max_comments=12, max_chars=1600):
+    texts = []
+    for c in (video.get("top_comments", []) or [])[:max_comments]:
+        t = (c.get("text") or "").strip()
+        if t:
+            texts.append(t)
+    s = " ".join(texts).strip()
+    return s[:max_chars]
+
+def has_lang(d: dict, lang: str) -> bool:
+    """True si dict a une clé qui commence par 'fr' / 'en' / 'es' (ex: fr-FR)"""
+    if not isinstance(d, dict):
+        return False
+    for k in d.keys():
+        try:
+            if str(k).lower().startswith(lang):
+                return True
+        except Exception:
+            continue
+    return False
+
+def guess_language_keep(video, target_lang_code: str):
+    """
+    ✅ Décide garder/rejeter avec un score multi-signaux.
+    BUT: éviter le carnage 39/40 rejetées.
+    - Ne JAMAIS rejeter juste parce que video['language'] != target.
+    - Rejeter seulement si une autre langue gagne avec grosse marge.
+    """
+    score = defaultdict(float)
+    reasons = []
+
+    # 1) Captions disponibles (signal fort)
+    subs = video.get("subtitles") or {}
+    autos = video.get("automatic_captions") or {}
+
+    if has_lang(subs, "fr") or has_lang(autos, "fr"):
+        score["fr"] += 3.0
+        reasons.append("captions_fr")
+    if has_lang(subs, "en") or has_lang(autos, "en"):
+        score["en"] += 2.0
+        reasons.append("captions_en")
+    if has_lang(subs, "es") or has_lang(autos, "es"):
+        score["es"] += 2.0
+        reasons.append("captions_es")
+
+    # 2) Hook (si dispo) -> langue parlée (souvent le meilleur signal)
+    hook = video.get("hook") or ""
+    if isinstance(hook, str) and hook not in ["Sous-titres non disponibles"] and len(hook.strip()) >= 60:
+        lang_h, conf_h = lingua_guess(clean_text(hook))
+        if lang_h:
+            # Hook = signal fort
+            score[lang_h] += 2.5 * conf_h
+            reasons.append(f"hook_{lang_h}_{conf_h:.2f}")
+
+    # 3) Commentaires (langue de l'audience, utile si assez de texte)
+    comments_blob = concat_top_comments(video)
+    comments_blob_clean = clean_text(comments_blob)
+    if len(comments_blob_clean) >= 120:
+        lang_c, conf_c = lingua_guess(comments_blob_clean)
+        if lang_c:
+            score[lang_c] += 1.5 * conf_c
+            reasons.append(f"comments_{lang_c}_{conf_c:.2f}")
+
+    # 4) Titre + description (signal faible/bruité)
+    title = video.get("title") or ""
+    description = (video.get("description") or "")[:500]
+    td_clean = clean_text(f"{title} {description}")
+    if len(td_clean) >= 80:
+        lang_t, conf_t = lingua_guess(td_clean)
+        if lang_t:
+            score[lang_t] += 1.0 * conf_t
+            reasons.append(f"title_desc_{lang_t}_{conf_t:.2f}")
+
+    # Si aucun score: on garde (sinon tu perds tout sur Starlink)
+    if not score:
+        return True, "✅ Conservé (aucun signal langue exploitable)"
+
+    # Trouver top1 & top2
+    ranked = sorted(score.items(), key=lambda x: x[1], reverse=True)
+    top_lang, top_score = ranked[0]
+    second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+
+    # ✅ Règles de décision
+    # - On garde si la langue cible est top1 et score minimum atteint
+    # - On rejette seulement si une autre langue est top1 avec marge très forte
+    MIN_KEEP = 1.2               # seuil bas pour éviter 39/40 rejet
+    STRONG_REJECT_MARGIN = 1.8    # marge forte pour rejeter
+
+    if top_lang == target_lang_code and top_score >= MIN_KEEP:
+        return True, f"✅ Gardé ({top_lang} {top_score:.2f} vs {second_score:.2f}) | " + ", ".join(reasons)
+
+    if top_lang != target_lang_code and (top_score - second_score) >= STRONG_REJECT_MARGIN and top_score >= (MIN_KEEP + 0.6):
+        return False, f"❌ Rejet ({top_lang} {top_score:.2f} vs {second_score:.2f}) | " + ", ".join(reasons)
+
+    # Incertain -> on garde (sinon tu t'écroules sur les sujets internationaux)
+    return True, f"✅ Conservé (incertain: {top_lang} {top_score:.2f} vs {second_score:.2f}) | " + ", ".join(reasons)
+
+# =============================
 # ============ SIDEBAR ============
+# =============================
 st.sidebar.header("⚙️ Paramètres")
 
 # MULTI-MOTS-CLÉS
@@ -92,17 +231,15 @@ with col_d3:
 if selected_views:
     st.sidebar.success(f"✅ OK")
 
+# =============================
 # ============ BOUTON RECHERCHE ============
+# =============================
 if st.sidebar.button("🚀 Lancer", use_container_width=True):
     if not keywords_list:
         st.error("❌ Au moins un mot-clé requis!")
     elif not selected_views:
         st.error("❌ Sélectionne une gamme de vues!")
     else:
-        # ============ INSTANCES YoutubeDL RÉUTILISABLES ============
-        # NOTE: YoutubeDL n’est pas officiellement garanti thread-safe.
-        # Je n’ai PAS changé ton architecture (tu l’as demandé), mais si tu as des comportements bizarres,
-        # il faudra créer une instance YoutubeDL par thread.
         YDL_SEARCH = YoutubeDL({
             'quiet': True,
             'no_warnings': True,
@@ -142,20 +279,17 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
         all_comments_list = []
 
         try:
-            # Boucle sur chaque mot-clé
             for keyword_idx, keyword in enumerate(keywords_list):
                 status.text(f"🔍 Recherche: {keyword} ({keyword_idx+1}/{len(keywords_list)})")
 
                 search_limit = 40
                 search_query = f"ytsearch{search_limit}:{keyword}"
 
-                # RECHERCHE
                 results = YDL_SEARCH.extract_info(search_query, download=False)
                 video_ids = results.get('entries', [])
                 video_ids = [v for v in video_ids if v is not None][:search_limit]
 
                 progress_bar.progress(10 + int((keyword_idx / len(keywords_list)) * 10))
-
                 status.text(f"📊 Récupération complète: {keyword} (parallèle turbo)...")
 
                 def fetch_all_data(vid, keyword):
@@ -170,7 +304,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
 
                         info['search_keyword'] = keyword
 
-                        # HOOK via sous-titres (inchangé)
+                        # HOOK (inchangé)
                         hook_text = ""
                         subtitles = info.get('subtitles', {})
                         auto_subs = info.get('automatic_captions', {})
@@ -216,7 +350,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
 
                         info['hook'] = hook_text if hook_text else "Sous-titres non disponibles"
 
-                        # Commentaires (inchangé)
+                        # Commentaires
                         comments = info.get('comments', [])
                         if comments:
                             comments_sorted = sorted(comments, key=lambda x: x.get('like_count', 0) or 0, reverse=True)[:20]
@@ -228,7 +362,6 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                     except:
                         return None
 
-                # Parallèle
                 videos = []
                 with ThreadPoolExecutor(max_workers=15) as executor:
                     futures = {executor.submit(fetch_all_data, vid, keyword): vid for vid in video_ids}
@@ -240,10 +373,9 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                 st.info(f"✅ {len(videos)} vidéos avec métadonnées complètes")
                 progress_bar.progress(20)
 
-                # FILTRAGE STRICT SI MOTS ENTRE GUILLEMETS (inchangé)
+                # Filtrage strict guillemets (inchangé)
                 if keyword.startswith('"') and keyword.endswith('"'):
                     strict_words = keyword.strip('"').lower().split()
-
                     videos_temp = []
                     for video in videos:
                         title = (video.get('title') or '').lower()
@@ -251,149 +383,51 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                         full_text = title + ' ' + description
                         if all(word in full_text for word in strict_words):
                             videos_temp.append(video)
-
                     videos = videos_temp
                     st.info(f"🔍 Recherche stricte \"{keyword.strip('\"')}\" : {len(videos)} vidéos")
 
-                # =========================
-                # ✅ FILTRAGE PAR LANGUE (PROBLÈME CORRIGÉ ICI UNIQUEMENT)
-                # - On utilise majoritairement : (1) hook (captions) (2) commentaires (3) description
-                # - On REJETTE uniquement si preuve forte d’une AUTRE langue
-                # - Sinon on GARDE (incertitude ≠ rejet)
-                # =========================
+                # ✅ FILTRE LANGUE ROBUSTE (avec explications)
                 if language != "Auto (toutes langues)":
                     target_lang_code = {"Français": "fr", "Anglais": "en", "Espagnol": "es"}.get(language)
-
-                    def _safe_detect_top(text: str):
-                        """
-                        Retourne (lang, prob) du top1 via detect_langs, sinon (None, 0.0)
-                        """
-                        if not LANGDETECT_AVAILABLE:
-                            return (None, 0.0)
-                        try:
-                            langs = detect_langs(text)
-                            if not langs:
-                                return (None, 0.0)
-                            top = langs[0]
-                            return (getattr(top, "lang", None), float(getattr(top, "prob", 0.0)))
-                        except Exception:
-                            return (None, 0.0)
-
-                    def _concat_top_comments(video, max_comments=12, max_chars=1200):
-                        texts = []
-                        for c in (video.get("top_comments", []) or [])[:max_comments]:
-                            t = (c.get("text") or "").strip()
-                            if t:
-                                texts.append(t)
-                        s = " ".join(texts).strip()
-                        return s[:max_chars]
-
                     videos_temp = []
-                    rejected_count = 0
-                    kept_uncertain = 0
-                    no_lang_count = 0
-                    rejected_examples = []
+                    rejected = 0
+                    examples = []
 
-                    for video in videos:
-                        title = video.get('title', '')
-                        description = video.get('description', '')
-                        hook = video.get('hook', '') or ""
-                        video_lang = (video.get('language') or '').lower().split('-')[0]
-
-                        # Par défaut : on garde, sauf preuve forte du contraire
-                        keep_video = True
-                        reason = "✅ Conservé (incertitude)"
-
-                        # 1) Signal fort: YouTube annonce clairement une des 3 langues
-                        if video_lang in ['fr', 'en', 'es']:
-                            if video_lang != target_lang_code:
-                                keep_video = False
-                                reason = f"❌ YouTube: {video_lang} (attendu: {target_lang_code})"
-                            else:
-                                keep_video = True
-                                reason = f"✅ YouTube: {video_lang}"
+                    for v in videos:
+                        keep, why = guess_language_keep(v, target_lang_code)
+                        if keep:
+                            videos_temp.append(v)
                         else:
-                            no_lang_count += 1
-
-                        # 2) Vote par contenu réel: HOOK (si dispo)
-                        # On rejette seulement si très sûr autre langue
-                        if keep_video and LANGDETECT_AVAILABLE:
-                            if isinstance(hook, str) and hook not in ["Sous-titres non disponibles"] and len(hook.strip()) >= 60:
-                                dlang, dprob = _safe_detect_top(hook.strip())
-                                if dlang in ['fr', 'en', 'es'] and dlang != target_lang_code and dprob >= 0.90:
-                                    keep_video = False
-                                    reason = f"❌ Hook détecté: {dlang} ({dprob:.2f})"
-                                elif dlang == target_lang_code and dprob >= 0.70:
-                                    keep_video = True
-                                    reason = f"✅ Hook détecté: {dlang} ({dprob:.2f})"
-
-                        # 3) Vote “majoritaire” via commentaires (ce que tu demandes)
-                        # On rejette seulement si très sûr autre langue
-                        if keep_video and LANGDETECT_AVAILABLE:
-                            comments_blob = _concat_top_comments(video)
-                            if len(comments_blob.strip()) >= 120:
-                                clang, cprob = _safe_detect_top(comments_blob)
-                                if clang in ['fr', 'en', 'es'] and clang != target_lang_code and cprob >= 0.92:
-                                    keep_video = False
-                                    reason = f"❌ Commentaires majoritaires: {clang} ({cprob:.2f})"
-                                elif clang == target_lang_code and cprob >= 0.75:
-                                    keep_video = True
-                                    reason = f"✅ Commentaires majoritaires: {clang} ({cprob:.2f})"
-
-                        # 4) Fallback: description (nettoyage léger en limitant la taille)
-                        if keep_video and LANGDETECT_AVAILABLE:
-                            text_desc = f"{title} {description[:500]}".strip()
-                            if len(text_desc) >= 80:
-                                dlang2, dprob2 = _safe_detect_top(text_desc)
-                                if dlang2 in ['fr', 'en', 'es'] and dlang2 != target_lang_code and dprob2 >= 0.93:
-                                    keep_video = False
-                                    reason = f"❌ Titre/desc: {dlang2} ({dprob2:.2f})"
-                                elif dlang2 == target_lang_code and dprob2 >= 0.75:
-                                    keep_video = True
-                                    reason = f"✅ Titre/desc: {dlang2} ({dprob2:.2f})"
-
-                        if keep_video:
-                            videos_temp.append(video)
-                            if reason.startswith("✅ Conservé"):
-                                kept_uncertain += 1
-                        else:
-                            rejected_count += 1
-                            if len(rejected_examples) < 3:
-                                rejected_examples.append((title[:60], video_lang or "?", reason))
+                            rejected += 1
+                            if len(examples) < 5:
+                                examples.append((v.get("title", "")[:70], why))
 
                     videos = videos_temp
+                    st.info(f"🌍 {len(videos)} vidéos gardées en {language} | ❌ {rejected} rejetées")
 
-                    st.info(f"🌍 **{len(videos)} vidéos en {language}** (filtre robuste)")
-                    st.write(f"   • Gardées: {len(videos)} | Rejetées: {rejected_count} | Sans champ language: {no_lang_count} | Gardées malgré incertitude: {kept_uncertain}")
-
-                    if rejected_examples:
-                        with st.expander("🔍 Voir exemples de vidéos rejetées (debug)"):
-                            for t, lang_ex, why in rejected_examples:
-                                st.write(f"• **{t}...** → Langue champ: `{lang_ex}` | {why}")
-
-                    if not LANGDETECT_AVAILABLE:
-                        st.warning("⚠️ langdetect n'est pas installé : le filtre langue devient très approximatif.")
+                    if examples:
+                        with st.expander("🔍 Exemples rejets (debug)"):
+                            for t, why in examples:
+                                st.write(f"• **{t}...** → {why}")
 
                 progress_bar.progress(30)
 
-                # DEBUG: Afficher les vidéos avant filtrage par vues
+                # DEBUG avant vues
                 st.write(f"📊 **DEBUG: {len(videos)} vidéos avant filtrage par vues**")
                 if videos:
                     st.write("**Exemple de vues des 5 premières vidéos:**")
                     for i, v in enumerate(videos[:5], 1):
                         views = v.get('view_count', 0) or 0
                         st.write(f"  {i}. {v.get('title', '')[:50]}... → **{views:,} vues**")
-
                     st.write(f"**Filtres de vues actifs:** {[f'{min_v:,}-{max_v:,}' for min_v, max_v, _ in selected_views]}")
 
-                # FILTRER PAR VUES + AUTRES (inchangé)
+                # Filtrer par vues + autres (inchangé)
                 for video in videos:
                     views = video.get('view_count', 0) or 0
                     likes = video.get('like_count', 0) or 0
                     duration = video.get('duration', 0) or 0
                     upload_date = video.get('upload_date')
 
-                    # Filtre vues
                     match_views = False
                     for min_v, max_v, _ in selected_views:
                         if min_v <= views <= max_v:
@@ -402,13 +436,11 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                     if not match_views:
                         continue
 
-                    # Filtre engagement
                     if use_engagement and views > 0:
                         engagement_ratio = (likes / views) * 100
                         if engagement_ratio < min_engagement:
                             continue
 
-                    # Filtre date
                     if date_limit and upload_date:
                         try:
                             video_date = datetime.strptime(upload_date, '%Y%m%d')
@@ -417,7 +449,6 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                         except:
                             pass
 
-                    # Filtre durée
                     if duration_filters:
                         duration_match = False
                         if "short" in duration_filters and duration < 300:
@@ -431,17 +462,15 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
 
                     all_videos_filtered.append(video)
 
-            # DEBUG: Vidéos après TOUS les filtres
             st.success(f"✅ {len(all_videos_filtered)} vidéo(s) après TOUS les filtres (vues, engagement, date, durée)")
 
             if len(all_videos_filtered) == 0:
-                st.error(f"❌ Aucune vidéo trouvée avec tous les filtres.")
+                st.error("❌ Aucune vidéo trouvée avec tous les filtres.")
                 st.stop()
 
             st.success(f"✅ {len(all_videos_filtered)} vidéo(s) trouvée(s) pour {len(keywords_list)} mot(s)-clé(s)!")
             st.divider()
 
-            # Construire la liste des commentaires
             progress_bar.progress(60)
             status.text("📝 Compilation des données...")
 
@@ -462,10 +491,9 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
 
             progress_bar.progress(70)
 
-            # LAYOUT
             left_col, right_col = st.columns([1, 2])
 
-            # === GAUCHE: SECTION COPIE ===
+            # === GAUCHE
             with left_col:
                 st.header("📋 Copie en bas")
                 st.divider()
@@ -510,7 +538,7 @@ Voici les commentaires :"""
 
                 st.text_area("Copie-colle ceci dans ChatGPT:", value=copy_text, height=400, key="copy_area")
 
-            # === DROITE: VIDÉOS ===
+            # === DROITE
             with right_col:
                 st.header(f"📹 Vidéos ({len(all_videos_filtered)} trouvées)")
 
