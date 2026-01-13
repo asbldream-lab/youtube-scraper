@@ -56,7 +56,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
         status.text("🔍 Recherche vidéos...")
         
         try:
-            # RECHERCHE - Augmentation à 100 résultats pour avoir plus de choix
+            # RECHERCHE - Augmentation à 300 résultats pour avoir plus de choix
             ydl_opts = {
                 'quiet': True, 
                 'no_warnings': True, 
@@ -67,44 +67,34 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
             # Configuration de la langue pour YouTube
             if language == "Français":
                 ydl_opts['extractor_args'] = {'youtube': {'lang': ['fr']}}
-                search_query = f"ytsearch100:{keyword}"
+                search_query = f"ytsearch300:{keyword}"
             elif language == "Anglais":
                 ydl_opts['extractor_args'] = {'youtube': {'lang': ['en']}}
-                search_query = f"ytsearch100:{keyword}"
+                search_query = f"ytsearch300:{keyword}"
             else:  # Auto
-                search_query = f"ytsearch100:{keyword}"
+                search_query = f"ytsearch300:{keyword}"
             
             with YoutubeDL(ydl_opts) as ydl:
                 results = ydl.extract_info(search_query, download=False)
                 videos = results.get('entries', [])
             
-            # Filtrage supplémentaire par langue si nécessaire
-            if language != "Auto (toutes langues)":
+            st.info(f"🔍 {len(videos)} vidéos trouvées sur YouTube")
+            
+            # Filtrage LÉGER par langue si nécessaire (on garde presque tout)
+            if language == "Anglais":
+                # Pour l'anglais, on filtre seulement si clairement français
                 videos_temp = []
-                target_lang = 'fr' if language == "Français" else 'en'
-                
                 for video in videos:
                     if video:
-                        # Vérifier la langue de la vidéo
                         video_lang = video.get('language', '').lower()
-                        uploader = video.get('uploader', '').lower()
-                        title = video.get('title', '').lower()
-                        
-                        # Critères de filtrage par langue
-                        if target_lang == 'fr':
-                            # Pour le français, chercher des indices
-                            if video_lang == 'fr' or any(word in title + uploader for word in ['fr', 'français', 'france']):
-                                videos_temp.append(video)
-                        elif target_lang == 'en':
-                            # Pour l'anglais
-                            if video_lang in ['en', 'en-us', 'en-gb'] or video_lang == '' or video_lang is None:
-                                videos_temp.append(video)
+                        # Garder si pas explicitement français
+                        if video_lang != 'fr':
+                            videos_temp.append(video)
                 
-                # Si pas assez de résultats filtrés, garder les résultats originaux
                 if len(videos_temp) >= 10:
                     videos = videos_temp
-                else:
-                    st.warning(f"⚠️ Peu de vidéos en {language} trouvées, affichage de tous les résultats")
+                    st.info(f"🌍 {len(videos)} vidéos après filtre langue")
+            # Pour le français ou Auto, on garde TOUTES les vidéos
             
             progress_bar.progress(20)
             
