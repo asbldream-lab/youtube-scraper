@@ -59,8 +59,9 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
             ydl_opts = {
                 'quiet': True, 
                 'no_warnings': True, 
-                'socket_timeout': 20
-                # PAS de 'extract_flat' pour avoir les vues !
+                'socket_timeout': 20,
+                'ignoreerrors': True,  # IMPORTANT : ignorer les vidéos avec restrictions
+                'age_limit': None,  # Essayer quand même les vidéos avec restrictions d'âge
             }
             
             # Nombre de résultats selon la langue
@@ -82,7 +83,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                 results = ydl.extract_info(search_query, download=False)
                 videos = results.get('entries', [])
             
-            # Filtrer les vidéos None
+            # Filtrer les vidéos None (celles qui ont échoué)
             videos = [v for v in videos if v is not None]
             
             st.info(f"🔍 {len(videos)} vidéos trouvées sur YouTube")
