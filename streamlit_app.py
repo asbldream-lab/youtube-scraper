@@ -55,75 +55,78 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
         status.text("🔍 Recherche vidéos...")
         
         try:
-            # RECHERCHE YouTube
-            ydl_opts = {
+            # RECHERCHE YouTube - OPTIMISÉE POUR VITESSE
+            status.text("🔍 Recherche rapide sur YouTube...")
+            
+            # Étape 1 : Recherche RAPIDE avec extract_flat
+            ydl_opts_fast = {
                 'quiet': True, 
-                'no_warnings': True, 
-                'socket_timeout': 20,
-                'ignoreerrors': True,  # IMPORTANT : ignorer les vidéos avec restrictions
-                'age_limit': None,  # Essayer quand même les vidéos avec restrictions d'âge
+                'no_warnings': True,
+                'extract_flat': 'in_playlist',  # RAPIDE : juste les IDs
+                'socket_timeout': 15,
+                'ignoreerrors': True,
             }
             
-            # Nombre de résultats selon la langue
-            search_limit = 50  # Réduit pour la rapidité
+            search_limit = 30  # Réduit pour vitesse
             
-            # Configuration de la langue pour YouTube
             if language == "Français":
-                ydl_opts['extractor_args'] = {'youtube': {'lang': ['fr']}}
+                ydl_opts_fast['extractor_args'] = {'youtube': {'lang': ['fr']}}
                 search_query = f"ytsearch{search_limit}:{keyword}"
             elif language == "Anglais":
-                ydl_opts['extractor_args'] = {'youtube': {'lang': ['en']}}
+                ydl_opts_fast['extractor_args'] = {'youtube': {'lang': ['en']}}
                 search_query = f"ytsearch{search_limit}:{keyword}"
-            else:  # Auto
+            else:
                 search_query = f"ytsearch{search_limit}:{keyword}"
             
-            status.text("🔍 Recherche et extraction des métadonnées...")
-            
-            with YoutubeDL(ydl_opts) as ydl:
+            with YoutubeDL(ydl_opts_fast) as ydl:
                 results = ydl.extract_info(search_query, download=False)
-                videos = results.get('entries', [])
+                video_ids = results.get('entries', [])
             
-            # Filtrer les vidéos None (celles qui ont échoué)
-            videos = [v for v in videos if v is not None]
+            video_ids = [v for v in video_ids if v is not None]
             
-            st.info(f"🔍 {len(videos)} vidéos trouvées sur YouTube")
+            progress_bar.progress(10)
             
-            # Debug : afficher combien ont des vues
-            videos_with_views = [v for v in videos if v.get('view_count', 0)]
-            st.info(f"📊 {len(videos_with_views)} vidéos avec info de vues")
+            # Étape 2 : Récupérer les VUES seulement (pas tout)
+            status.text("📊 Récupération des statistiques...")
             
-            # Pour le français ou Auto, on garde TOUTES les vidéos
-            # Pour l'anglais, on filtre légèrement
-            if language == "Anglais":
-                videos_temp = []
-                for video in videos:
-                    video_lang = video.get('language', '').lower()
-                    if video_lang != 'fr':
-                        videos_temp.append(video)
-                
-                if len(videos_temp) >= 5:
-                    videos = videos_temp
-                    st.info(f"🌍 {len(videos)} vidéos après filtre langue")
+            ydl_opts_views = {
+                'quiet': True,
+                'no_warnings': True,
+                'socket_timeout': 10,
+                'ignoreerrors': True,
+                'skip_download': True,
+            }
+            
+            videos = []
+            for idx, vid in enumerate(video_ids[:search_limit]):
+                try:
+                    video_id = vid.get('id')
+                    if not video_id:
+                        continue
+                    
+                    with YoutubeDL(ydl_opts_views) as ydl:
+                        info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+                        if info:
+                            videos.append(info)
+                    
+                    # Mise à jour progressive
+                    if idx % 5 == 0:
+                        progress_bar.progress(10 + int((idx / len(video_ids)) * 10))
+                except:
+                    continue
             
             progress_bar.progress(20)
             
             # FILTRER PAR VUES - Strict!
             videos_filtered = []
-            debug_info = []  # Pour voir ce qui se passe
             
             for video in videos:
                 views = video.get('view_count', 0) or 0
-                debug_info.append(f"{video.get('title', 'Sans titre')[:50]}... = {views:,} vues")
                 
                 for min_v, max_v, label in selected_views:
                     if min_v <= views <= max_v:
                         videos_filtered.append(video)
                         break
-            
-            # Afficher quelques exemples pour debug
-            with st.expander("🔍 Debug : Vues des premières vidéos trouvées"):
-                for info in debug_info[:10]:
-                    st.text(info)
             
             if len(videos_filtered) == 0:
                 st.error(f"❌ Aucune vidéo trouvée avec les filtres de vues sélectionnés.")
@@ -133,7 +136,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
             st.success(f"✅ {len(videos_filtered)} vidéo(s) trouvée(s)!")
             st.divider()
             
-            # RÉCUPÉRER TOUS LES COMMENTAIRES
+            # RÉCUPÉRER TOUS LES COMMENTAIRES - OPTIMISÉ
             status.text("💬 Récupération commentaires...")
             progress_bar.progress(40)
             
@@ -151,9 +154,10 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                     ydl_comments = YoutubeDL({
                         'quiet': True,
                         'no_warnings': True,
-                        'socket_timeout': 20,
+                        'socket_timeout': 10,  # RÉDUIT pour vitesse
                         'getcomments': True,
-                        'extractor_args': {'youtube': {'max_comments': ['100']}}
+                        'ignoreerrors': True,
+                        'extractor_args': {'youtube': {'max_comments': ['50']}}  # RÉDUIT : 50 au lieu de 100
                     })
                     
                     info = ydl_comments.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
