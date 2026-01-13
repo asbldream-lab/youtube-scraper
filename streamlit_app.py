@@ -187,10 +187,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
             
             # === GAUCHE: SECTION COPIE ===
             with left_col:
-                # Header avec bouton copier
-                col_header, col_button = st.columns([2, 1])
-                with col_header:
-                    st.header("📋 Copie")
+                st.header("📋 Copie")
                 
                 prompt = """*"Agis comme un Consultant en Stratégie YouTube Senior. Je te donne des données brutes (commentaires). Ignore les compliments simples. Cherche les problèmes.
 
@@ -213,42 +210,6 @@ Livrable attendu :
                         copy_text += f"{i}. {comment['author']} ({comment['likes']} likes):\n{comment['text']}\n\n"
                 else:
                     copy_text += "\n[Aucun commentaire trouvé]"
-                
-                # BOUTON COPIER - utilise base64 pour éviter les problèmes d'échappement
-                with col_button:
-                    copy_text_b64 = base64.b64encode(copy_text.encode('utf-8')).decode('utf-8')
-                    
-                    copy_button_html = f"""
-                    <script>
-                    function copierTexte() {{
-                        try {{
-                            const base64Text = "{copy_text_b64}";
-                            const decodedText = atob(base64Text);
-                            navigator.clipboard.writeText(decodedText).then(function() {{
-                                alert('✅ Texte copié dans le presse-papiers!');
-                            }}, function(err) {{
-                                console.error('Erreur de copie:', err);
-                                alert('❌ Erreur lors de la copie: ' + err);
-                            }});
-                        }} catch(e) {{
-                            alert('❌ Erreur: ' + e.message);
-                        }}
-                    }}
-                    </script>
-                    <button onclick="copierTexte()" style="
-                        background-color: #FF4B4B;
-                        color: white;
-                        padding: 8px 16px;
-                        border: none;
-                        border-radius: 5px;
-                        cursor: pointer;
-                        font-size: 14px;
-                        width: 100%;
-                        font-weight: bold;
-                        margin-top: 8px;
-                    ">📋 Copier</button>
-                    """
-                    st.markdown(copy_button_html, unsafe_allow_html=True)
                 
                 # AFFICHER LA ZONE DE COPIE
                 st.text_area("Copie-colle ceci dans ChatGPT:", value=copy_text, height=600, key="copy_area")
