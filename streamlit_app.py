@@ -5,16 +5,22 @@ from datetime import datetime, timedelta
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+st.set_page_config(page_title="YouTube Scraper Pro", layout="wide")
+
 # Détection de langue robuste
 try:
     from langdetect import detect, LangDetectException
+    # Test rapide pour s'assurer que ça fonctionne
+    test_result = detect("This is a test")
     LANGDETECT_AVAILABLE = True
-except ImportError:
+except (ImportError, Exception):
     LANGDETECT_AVAILABLE = False
-    st.warning("⚠️ Pour un filtrage de langue optimal, installez langdetect: `pip install langdetect`")
 
-st.set_page_config(page_title="YouTube Scraper Pro", layout="wide")
 st.title("🚀 YouTube Keyword Research Tool PRO")
+
+# Avertissement si langdetect pas dispo
+if not LANGDETECT_AVAILABLE:
+    st.error("🚨 **langdetect n'est PAS installé !** Le filtrage par langue sera très limité. Installe-le: `pip install langdetect`")
 
 # ============ SIDEBAR ============
 st.sidebar.header("⚙️ Paramètres")
@@ -259,39 +265,93 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                     videos = videos_temp
                     st.info(f"🔍 Recherche stricte \"{keyword.strip('\"')}\" : {len(videos)} vidéos")
                 
-                # FILTRAGE PAR LANGUE - PERMISSIF
+                # FILTRAGE PAR LANGUE - VERSION STRICTE (REJET PAR DÉFAUT)
                 if language != "Auto (toutes langues)":
                     videos_temp = []
                     target_lang_code = {"Français": "fr", "Anglais": "en", "Espagnol": "es"}.get(language)
                     
+                    rejected_count = 0
+                    no_lang_count = 0
+                    rejected_examples = []  # Pour debug
+                    
                     for video in videos:
-                        keep_video = True
+                        # PAR DÉFAUT : ON REJETTE (inverse de avant !)
+                        keep_video = False
+                        reject_reason = "Non détecté"
+                        
                         video_lang = (video.get('language') or '').lower().split('-')[0]
                         title = video.get('title', '')
                         description = video.get('description', '')
                         
+                        # MÉTHODE 1 : Champ language de YouTube (PRIORITÉ ABSOLUE)
                         if video_lang and len(video_lang) == 2:
                             if video_lang == target_lang_code:
+                                # C'est la bonne langue selon YouTube !
                                 keep_video = True
-                            elif video_lang in ['fr', 'en', 'es'] and video_lang != target_lang_code:
+                                reject_reason = f"✅ YouTube: {video_lang}"
+                            else:
+                                # C'est une autre langue selon YouTube
                                 keep_video = False
-                        
-                        if keep_video and LANGDETECT_AVAILABLE and len(f"{title} {description}".strip()) > 30:
-                            try:
-                                detected = detect(f"{title} {description[:300]}")
-                                if detected == target_lang_code:
-                                    keep_video = True
-                                elif detected in ['fr', 'en', 'es'] and detected != target_lang_code:
-                                    if video_lang == detected:
+                                reject_reason = f"❌ YouTube: {video_lang} (attendu: {target_lang_code})"
+                                rejected_count += 1
+                                if len(rejected_examples) < 3:
+                                    rejected_examples.append((title[:60], video_lang, reject_reason))
+                        else:
+                            # Pas de champ language
+                            no_lang_count += 1
+                            
+                            # MÉTHODE 2 : Détection avec langdetect (STRICT)
+                            if LANGDETECT_AVAILABLE:
+                                text_to_analyze = f"{title} {description[:500]}"
+                                
+                                if len(text_to_analyze.strip()) > 30:
+                                    try:
+                                        detected = detect(text_to_analyze)
+                                        
+                                        if detected == target_lang_code:
+                                            # Détecté comme la bonne langue !
+                                            keep_video = True
+                                            reject_reason = f"✅ Détecté: {detected}"
+                                        else:
+                                            # Détecté comme une autre langue
+                                            keep_video = False
+                                            reject_reason = f"❌ Détecté: {detected} (attendu: {target_lang_code})"
+                                            rejected_count += 1
+                                            if len(rejected_examples) < 3:
+                                                rejected_examples.append((title[:60], detected, reject_reason))
+                                    except Exception as e:
+                                        # Erreur de détection = REJET (strict)
                                         keep_video = False
-                            except:
-                                pass
+                                        reject_reason = f"❌ Erreur détection: {type(e).__name__}"
+                                        rejected_count += 1
+                                else:
+                                    # Pas assez de texte = REJET (strict)
+                                    keep_video = False
+                                    reject_reason = "❌ Pas assez de texte"
+                                    rejected_count += 1
+                            else:
+                                # langdetect pas dispo = REJET (strict)
+                                keep_video = False
+                                reject_reason = "❌ langdetect non disponible"
+                                rejected_count += 1
                         
                         if keep_video:
                             videos_temp.append(video)
                     
                     videos = videos_temp
-                    st.info(f"🌍 {len(videos)} vidéos en {language}")
+                    
+                    # DEBUG DÉTAILLÉ
+                    st.info(f"🌍 **{len(videos)} vidéos en {language}** (filtre STRICT)")
+                    st.write(f"   • Gardées: {len(videos)} | Rejetées: {rejected_count} | Sans champ language: {no_lang_count}")
+                    
+                    # Montrer exemples de vidéos rejetées
+                    if rejected_examples:
+                        with st.expander("🔍 Voir exemples de vidéos rejetées (debug)"):
+                            for title, lang, reason in rejected_examples:
+                                st.write(f"• **{title}...** → Langue: `{lang}` | {reason}")
+                    
+                    if not LANGDETECT_AVAILABLE:
+                        st.warning("⚠️ **ATTENTION**: langdetect n'est pas installé ! Le filtrage est limité. Installe-le: `pip install langdetect`")
                 
                 progress_bar.progress(30)
                 
