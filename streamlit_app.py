@@ -476,92 +476,133 @@ Voici les commentaires :"""
             with right_col:
                 st.header(f"📹 Vidéos ({len(all_videos_filtered)} trouvées)")
                 
-                for idx, video in enumerate(all_videos_filtered, 1):
-                    title = video.get('title', 'Sans titre')
+                # TRIER PAR SUCCÈS (Vues + Viralité)
+                def calculate_success_score(video):
+                    """Calcule un score de succès basé sur vues et viralité"""
                     views = video.get('view_count', 0) or 0
-                    likes = video.get('like_count', 0) or 0
-                    duration = video.get('duration', 0) or 0
-                    channel = video.get('uploader', 'Inconnu')
-                    video_id = video.get('id', '')
-                    keyword = video.get('search_keyword', '')
-                    upload_date = video.get('upload_date', '')
                     subscribers = video.get('channel_follower_count', 0) or 0
-                    hook = video.get('hook', 'Non disponible')
                     
-                    # Calculer engagement
-                    engagement = (likes / views * 100) if views > 0 else 0
-                    
-                    # CALCULER SCORE DE VIRALITÉ
-                    virality_stars = ""
+                    # Score de viralité
                     if subscribers > 0:
-                        if views >= subscribers:
-                            virality_stars = "⭐⭐⭐"
-                        elif views >= subscribers * 0.5:
-                            virality_stars = "⭐⭐"
-                        elif views >= subscribers * 0.2:
-                            virality_stars = "⭐"
-                        else:
-                            virality_stars = "—"
+                        virality_multiplier = views / subscribers
                     else:
-                        virality_stars = "N/A"
+                        virality_multiplier = 1
                     
-                    # Formater durée
-                    mins = duration // 60
-                    secs = duration % 60
+                    # Score final = vues * multiplicateur viralité
+                    return views * (1 + virality_multiplier)
+                
+                # Trier par score décroissant
+                all_videos_filtered_sorted = sorted(all_videos_filtered, key=calculate_success_score, reverse=True)
+                
+                st.info("🔥 Vidéos triées par succès (viralité + vues)")
+                st.divider()
+                
+                # GALERIE DE THUMBNAILS - Grille 3 colonnes
+                for idx in range(0, len(all_videos_filtered_sorted), 3):
+                    cols = st.columns(3)
                     
-                    # Formater date
-                    date_str = ""
-                    if upload_date:
-                        try:
-                            date_obj = datetime.strptime(upload_date, '%Y%m%d')
-                            date_str = date_obj.strftime('%d/%m/%Y')
-                        except:
-                            date_str = upload_date
-                    
-                    video_comments = [c for c in all_comments_list if c['video_id'] == video_id]
-                    
-                    with st.expander(f"Vidéo {idx}: {title} | 👁️ {views:,} | 📈 {engagement:.2f}% | 🔥 {virality_stars}"):
-                        # AFFICHER LA THUMBNAIL
+                    for col_idx, col in enumerate(cols):
+                        video_idx = idx + col_idx
+                        if video_idx >= len(all_videos_filtered_sorted):
+                            break
+                        
+                        video = all_videos_filtered_sorted[video_idx]
+                        
+                        title = video.get('title', 'Sans titre')
+                        views = video.get('view_count', 0) or 0
+                        likes = video.get('like_count', 0) or 0
+                        duration = video.get('duration', 0) or 0
+                        channel = video.get('uploader', 'Inconnu')
+                        video_id = video.get('id', '')
+                        keyword = video.get('search_keyword', '')
+                        upload_date = video.get('upload_date', '')
+                        subscribers = video.get('channel_follower_count', 0) or 0
+                        hook = video.get('hook', 'Non disponible')
                         thumbnail_url = video.get('thumbnail', '')
-                        if thumbnail_url:
-                            col_thumb, col_info = st.columns([1, 2])
-                            with col_thumb:
-                                st.image(thumbnail_url, caption="Miniature", use_container_width=True)
-                            with col_info:
-                                st.write(f"**🔍 Mot-clé:** {keyword}")
-                                st.write(f"**📺 Canal:** {channel} ({subscribers:,} abonnés)")
-                                st.write(f"**👁️ Vues:** {views:,}")
-                                st.write(f"**👍 Likes:** {likes:,}")
-                                st.write(f"**📈 Engagement:** {engagement:.2f}%")
-                                st.write(f"**🔥 Viralité:** {virality_stars}")
-                                st.write(f"**⏱️ Durée:** {mins}min {secs}s")
-                                st.write(f"**📅 Publié:** {date_str}")
-                                st.write(f"**🔗** [Regarder](https://www.youtube.com/watch?v={video_id})")
+                        
+                        # Calculer engagement
+                        engagement = (likes / views * 100) if views > 0 else 0
+                        
+                        # CALCULER SCORE DE VIRALITÉ
+                        virality_stars = ""
+                        if subscribers > 0:
+                            if views >= subscribers:
+                                virality_stars = "⭐⭐⭐"
+                            elif views >= subscribers * 0.5:
+                                virality_stars = "⭐⭐"
+                            elif views >= subscribers * 0.2:
+                                virality_stars = "⭐"
+                            else:
+                                virality_stars = "—"
                         else:
-                            st.write(f"**🔍 Mot-clé:** {keyword}")
-                            st.write(f"**📺 Canal:** {channel} ({subscribers:,} abonnés)")
-                            st.write(f"**👁️ Vues:** {views:,}")
-                            st.write(f"**👍 Likes:** {likes:,}")
-                            st.write(f"**📈 Engagement:** {engagement:.2f}%")
-                            st.write(f"**🔥 Viralité:** {virality_stars}")
-                            st.write(f"**⏱️ Durée:** {mins}min {secs}s")
-                            st.write(f"**📅 Publié:** {date_str}")
-                            st.write(f"**🔗** [Regarder](https://www.youtube.com/watch?v={video_id})")
+                            virality_stars = "N/A"
                         
-                        st.divider()
-                        st.write("### 🎯 HOOK (Premières phrases)")
-                        st.info(hook)
+                        # Formater durée
+                        mins = duration // 60
+                        secs = duration % 60
                         
-                        st.divider()
-                        st.write("### 💬 Top 20 Commentaires (par likes)")
-                        
-                        if video_comments:
-                            for i, comment in enumerate(video_comments, 1):
-                                st.write(f"**{i}. {comment['author']}** 👍 {comment['likes']}")
-                                st.write(f"> {comment['text']}")
-                                st.write("")
-                        else:
-                            st.info("⚠️ Aucun commentaire disponible pour cette vidéo")
+                        with col:
+                            # THUMBNAIL EN GRAND
+                            if thumbnail_url:
+                                st.image(thumbnail_url, use_container_width=True)
+                            else:
+                                st.info("🖼️ Pas de miniature")
+                            
+                            # Infos compactes
+                            st.markdown(f"**#{video_idx+1} - {virality_stars}**")
+                            st.caption(f"{title[:60]}...")
+                            st.caption(f"👁️ {views:,} | 📈 {engagement:.1f}% | ⏱️ {mins}:{secs:02d}")
+                            st.caption(f"📺 {channel[:30]}...")
+                            
+                            # Bouton pour voir détails
+                            if st.button(f"Voir détails", key=f"btn_{video_id}", use_container_width=True):
+                                st.session_state[f'show_{video_id}'] = True
+                            
+                            # Afficher détails si bouton cliqué
+                            if st.session_state.get(f'show_{video_id}', False):
+                                with st.expander("📋 Détails complets", expanded=True):
+                                    st.write(f"**🔍 Mot-clé:** {keyword}")
+                                    st.write(f"**📺 Canal:** {channel} ({subscribers:,} abonnés)")
+                                    st.write(f"**👁️ Vues:** {views:,}")
+                                    st.write(f"**👍 Likes:** {likes:,}")
+                                    st.write(f"**📈 Engagement:** {engagement:.2f}%")
+                                    st.write(f"**🔥 Viralité:** {virality_stars}")
+                                    st.write(f"**⏱️ Durée:** {mins}min {secs}s")
+                                    
+                                    # Formater date
+                                    if upload_date:
+                                        try:
+                                            date_obj = datetime.strptime(upload_date, '%Y%m%d')
+                                            date_str = date_obj.strftime('%d/%m/%Y')
+                                            st.write(f"**📅 Publié:** {date_str}")
+                                        except:
+                                            pass
+                                    
+                                    st.write(f"**🔗** [Regarder](https://www.youtube.com/watch?v={video_id})")
+                                    
+                                    st.divider()
+                                    st.write("### 🎯 HOOK (Premières phrases)")
+                                    st.info(hook)
+                                    
+                                    st.divider()
+                                    st.write("### 💬 Top 20 Commentaires (par likes)")
+                                    
+                                    video_comments = [c for c in all_comments_list if c['video_id'] == video_id]
+                                    
+                                    if video_comments:
+                                        for i, comment in enumerate(video_comments, 1):
+                                            st.write(f"**{i}. {comment['author']}** 👍 {comment['likes']}")
+                                            st.write(f"> {comment['text']}")
+                                            st.write("")
+                                    else:
+                                        st.info("⚠️ Aucun commentaire disponible")
+                                    
+                                    # Bouton pour fermer
+                                    if st.button("Fermer", key=f"close_{video_id}"):
+                                        st.session_state[f'show_{video_id}'] = False
+                                        st.rerun()
+                    
+                    st.divider()
             
             progress_bar.progress(100)
             status.text("✅ Terminé!")
