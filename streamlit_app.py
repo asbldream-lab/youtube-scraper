@@ -5,44 +5,49 @@ from datetime import datetime, timedelta
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 
 st.set_page_config(page_title="YouTube Scraper Pro", layout="wide")
 st.title("🚀 YouTube Keyword Research Tool PRO")
 
 # =========================
-# ✅ DÉTECTION DE LANGUE SANS LIBRAIRIE EXTERNE
-# (captions + commentaires + title/desc, sans rejet brutal)
+# ✅ DÉTECTION LANGUE ROBUSTE (ANTI “39 REJETÉES / 40”)
+# - On GARDE par défaut
+# - On REJETTE seulement si preuve TRÈS forte d'une autre langue
+# - Les captions ne servent JAMAIS à rejeter (elles confirment seulement)
 # =========================
 
-FR_STOP = {
+FR_WORDS = {
     "le","la","les","un","une","des","du","de","d","et","ou","mais","donc","or","ni","car",
     "je","tu","il","elle","on","nous","vous","ils","elles",
-    "ce","cet","cette","ces","ça","cela","c","qui","que","quoi","dont","où",
+    "ce","cet","cette","ces","ça","cela","c",
+    "qui","que","quoi","dont","où",
     "est","suis","es","sommes","êtes","sont","été","être",
     "dans","sur","sous","avec","sans","pour","par","en","au","aux",
     "plus","moins","très","pas","ne","se","sa","son","ses","leur","leurs",
     "comme","quand","comment","pourquoi","parce","si","alors",
     "tout","tous","toute","toutes","rien","jamais","toujours",
-    "a","ai","as","avait","ont","avoir"
+    "a","ai","as","avait","ont","avoir",
+    "ceci","cela","ici","là","ainsi","donner","faire","dit","dire"
 }
-EN_STOP = {
+EN_WORDS = {
     "the","a","an","and","or","but","so","because","if","then",
     "i","you","he","she","we","they","it","me","him","her","us","them",
     "this","that","these","those","what","who","which","where","when","why","how",
     "is","am","are","was","were","be","been","being",
     "in","on","at","to","from","with","without","for","by","of",
     "more","less","very","not","no","yes","do","does","did","done",
-    "my","your","his","her","our","their"
+    "my","your","his","her","our","their",
+    "can","will","would","should","could"
 }
-ES_STOP = {
+ES_WORDS = {
     "el","la","los","las","un","una","unos","unas","y","o","pero","porque","si","entonces",
     "yo","tu","tú","él","ella","nosotros","vosotros","ustedes","ellos","ellas",
     "este","esta","estos","estas","eso","esa","aquí","ahí","allí",
     "es","soy","eres","somos","son","fue","eran","ser","estar",
     "en","sobre","con","sin","para","por","de","del","al",
     "más","menos","muy","no","sí",
-    "mi","mis","tu","tus","su","sus","nuestro","nuestra","sus"
+    "mi","mis","tu","tus","su","sus","nuestro","nuestra"
 }
 
 ACCENT_FR = set("àâäçéèêëîïôöùûüÿœæ")
@@ -59,31 +64,28 @@ def _clean_text(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-def _tokenize(s: str):
+def _tokens(s: str):
     s = _clean_text(s)
-    if not s:
-        return []
-    return s.split()
+    return s.split() if s else []
 
-def _stopword_score(tokens):
+def _count_hits(tokens):
     if not tokens:
         return {"fr": 0, "en": 0, "es": 0}
     c = Counter(tokens)
-    fr = sum(c[w] for w in FR_STOP if w in c)
-    en = sum(c[w] for w in EN_STOP if w in c)
-    es = sum(c[w] for w in ES_STOP if w in c)
+    fr = sum(c[w] for w in FR_WORDS if w in c)
+    en = sum(c[w] for w in EN_WORDS if w in c)
+    es = sum(c[w] for w in ES_WORDS if w in c)
     return {"fr": fr, "en": en, "es": es}
 
-def _accent_score(raw_text: str):
-    if not raw_text:
-        return {"fr": 0.0, "en": 0.0, "es": 0.0}
-    t = raw_text.lower()
+def _accent_hits(raw: str):
+    if not raw:
+        return {"fr": 0, "en": 0, "es": 0}
+    t = raw.lower()
     fr = sum(1 for ch in t if ch in ACCENT_FR)
     es = sum(1 for ch in t if ch in ACCENT_ES)
-    # l'anglais n'a pas vraiment d'accents -> score 0
-    return {"fr": float(fr), "en": 0.0, "es": float(es)}
+    return {"fr": fr, "en": 0, "es": es}
 
-def _has_lang_from_captions(info: dict, lang: str) -> bool:
+def _has_caption(info: dict, lang: str) -> bool:
     subs = info.get("subtitles") or {}
     autos = info.get("automatic_captions") or {}
     for d in (subs, autos):
@@ -93,104 +95,81 @@ def _has_lang_from_captions(info: dict, lang: str) -> bool:
                     if str(k).lower().startswith(lang):
                         return True
                 except Exception:
-                    continue
+                    pass
     return False
 
-def _concat_comments(info: dict, max_comments=12, max_chars=1600):
+def _text_from_top_comments(info: dict, max_comments=12, max_chars=1800) -> str:
     texts = []
     for c in (info.get("top_comments", []) or [])[:max_comments]:
         t = (c.get("text") or "").strip()
         if t:
             texts.append(t)
-    s = " ".join(texts).strip()
-    return s[:max_chars]
+    joined = " ".join(texts).strip()
+    return joined[:max_chars]
 
-def guess_language_keep(info: dict, target: str):
+def keep_by_language(info: dict, target: str):
     """
-    ✅ Décision "garder/rejeter" sans carnage.
-    Signaux:
-      1) captions dispo (fort)
-      2) hook (moyen/fort)
-      3) commentaires (moyen/fort si assez long)
-      4) titre/description (moyen)
-    Règle: on rejette seulement si une autre langue gagne clairement.
-    Sinon on GARDE.
+    Retour:
+      keep: bool
+      why: str
+
+    Stratégie:
+      - On construit un gros texte: commentaires + description + titre.
+      - On calcule des "indices" FR/EN/ES (mots fréquents + accents).
+      - Captions: seulement pour CONFIRMER (ajout au score target).
+      - Rejet UNIQUEMENT si:
+          (A) texte suffisamment long
+          (B) une autre langue gagne avec une marge forte
     """
-    score = defaultdict(float)
-    reasons = []
-
-    # 1) Captions: signal le plus solide
-    if _has_lang_from_captions(info, "fr"):
-        score["fr"] += 3.0
-        reasons.append("captions_fr")
-    if _has_lang_from_captions(info, "en"):
-        score["en"] += 2.0
-        reasons.append("captions_en")
-    if _has_lang_from_captions(info, "es"):
-        score["es"] += 2.0
-        reasons.append("captions_es")
-
-    # 2) Hook (si dispo)
-    hook = info.get("hook") or ""
-    if isinstance(hook, str) and hook not in ["Sous-titres non disponibles"] and len(hook.strip()) >= 60:
-        tokens = _tokenize(hook)
-        sw = _stopword_score(tokens)
-        acc = _accent_score(hook)
-        for lang in ("fr", "en", "es"):
-            score[lang] += 1.2 * sw[lang] + 0.6 * acc[lang]
-        reasons.append(f"hook_sw={sw}")
-
-    # 3) Commentaires (langue audience)
-    cb = _concat_comments(info)
-    cb_clean = _clean_text(cb)
-    if len(cb_clean) >= 120:
-        tokens = cb_clean.split()
-        sw = _stopword_score(tokens)
-        acc = _accent_score(cb)
-        for lang in ("fr", "en", "es"):
-            score[lang] += 1.0 * sw[lang] + 0.4 * acc[lang]
-        reasons.append(f"comments_sw={sw}")
-
-    # 4) Titre + description
     title = info.get("title") or ""
-    desc = (info.get("description") or "")[:600]
-    td = f"{title} {desc}"
-    td_clean = _clean_text(td)
-    if len(td_clean) >= 80:
-        tokens = td_clean.split()
-        sw = _stopword_score(tokens)
-        acc = _accent_score(td)
-        for lang in ("fr", "en", "es"):
-            score[lang] += 0.8 * sw[lang] + 0.5 * acc[lang]
-        reasons.append(f"title_desc_sw={sw}")
+    desc = (info.get("description") or "")[:1200]
+    comments_blob = _text_from_top_comments(info)
 
-    # Aucun signal exploitable -> on GARDE (sinon tu tues les sujets internationaux)
-    if not score:
-        return True, "✅ Conservé (aucun signal exploitable)"
+    # texte principal (priorité commentaires + description)
+    combined = (comments_blob + " " + desc + " " + title).strip()
+    combined_clean = _clean_text(combined)
+    tokens = combined_clean.split()
+
+    # Si pas assez de texte : on garde (sinon carnage)
+    if len(tokens) < 70:
+        # captions peuvent confirmer mais jamais rejeter
+        if _has_caption(info, target):
+            return True, f"✅ Gardé (peu de texte, captions_{target} présentes)"
+        return True, f"✅ Gardé (peu de texte: {len(tokens)} tokens, incertain)"
+
+    hits = _count_hits(tokens)
+    acc = _accent_hits(combined)
+
+    # scores (simple et stable)
+    score = {
+        "fr": hits["fr"] * 1.0 + acc["fr"] * 0.7,
+        "en": hits["en"] * 1.0 + acc["en"] * 0.7,
+        "es": hits["es"] * 1.0 + acc["es"] * 0.7,
+    }
+
+    # captions: bonus de confirmation pour la cible
+    if _has_caption(info, target):
+        score[target] += 8.0
 
     ranked = sorted(score.items(), key=lambda x: x[1], reverse=True)
     top_lang, top_score = ranked[0]
     second_score = ranked[1][1] if len(ranked) > 1 else 0.0
 
-    # Seuils "anti carnage"
-    STRONG_REJECT_MARGIN = 8.0   # marge importante avant rejet
-    MIN_EVIDENCE = 6.0           # score minimal pour qu'on croie le top
+    # règle anti-rejet massif
+    # -> on rejette uniquement si NON-target gagne très clairement
+    MARGIN_TO_REJECT = 14.0
 
-    # Garder si target en tête
     if top_lang == target:
-        return True, f"✅ Gardé: {top_lang} ({top_score:.1f} vs {second_score:.1f}) | {', '.join(reasons)}"
+        return True, f"✅ Gardé: top={top_lang} ({top_score:.1f} vs {second_score:.1f}) hits={hits} acc={acc}"
 
-    # Rejeter seulement si autre langue gagne très clairement
-    if top_score >= MIN_EVIDENCE and (top_score - second_score) >= STRONG_REJECT_MARGIN:
-        return False, f"❌ Rejet: {top_lang} ({top_score:.1f} vs {second_score:.1f}) | {', '.join(reasons)}"
+    if (top_score - second_score) >= MARGIN_TO_REJECT:
+        return False, f"❌ Rejet: top={top_lang} ({top_score:.1f} vs {second_score:.1f}) hits={hits} acc={acc}"
 
-    # Incertain -> on garde
-    return True, f"✅ Conservé (incertain): top={top_lang} ({top_score:.1f} vs {second_score:.1f}) | {', '.join(reasons)}"
+    # sinon: trop incertain -> on garde
+    return True, f"✅ Gardé (incertain): top={top_lang} ({top_score:.1f} vs {second_score:.1f}) hits={hits} acc={acc}"
 
 
-# =============================
 # ============ SIDEBAR ============
-# =============================
 st.sidebar.header("⚙️ Paramètres")
 
 st.sidebar.write("### 🔍 Mots-clés")
@@ -254,15 +233,14 @@ with col_d3:
 if selected_views:
     st.sidebar.success("✅ OK")
 
-# =============================
 # ============ BOUTON RECHERCHE ============
-# =============================
 if st.sidebar.button("🚀 Lancer", use_container_width=True):
     if not keywords_list:
         st.error("❌ Au moins un mot-clé requis!")
     elif not selected_views:
         st.error("❌ Sélectionne une gamme de vues!")
     else:
+        # Instances YoutubeDL réutilisables
         YDL_SEARCH = YoutubeDL({
             'quiet': True,
             'no_warnings': True,
@@ -287,6 +265,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
         progress_bar = st.progress(0)
         status = st.empty()
 
+        # Date limite
         date_limit = None
         if date_filter == "7 derniers jours":
             date_limit = datetime.now() - timedelta(days=7)
@@ -312,6 +291,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                 video_ids = [v for v in video_ids if v is not None][:search_limit]
 
                 progress_bar.progress(10 + int((keyword_idx / len(keywords_list)) * 10))
+
                 status.text(f"📊 Récupération complète: {keyword} (parallèle)...")
 
                 def fetch_all_data(vid, keyword):
@@ -326,7 +306,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
 
                         info['search_keyword'] = keyword
 
-                        # --- HOOK (inchangé)
+                        # HOOK (inchangé)
                         hook_text = ""
                         subtitles = info.get('subtitles', {})
                         auto_subs = info.get('automatic_captions', {})
@@ -372,7 +352,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
 
                         info['hook'] = hook_text if hook_text else "Sous-titres non disponibles"
 
-                        # --- Commentaires
+                        # Top commentaires
                         comments = info.get('comments', [])
                         if comments:
                             comments_sorted = sorted(comments, key=lambda x: x.get('like_count', 0) or 0, reverse=True)[:20]
@@ -395,7 +375,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                 st.info(f"✅ {len(videos)} vidéos avec métadonnées complètes")
                 progress_bar.progress(20)
 
-                # Filtrage strict guillemets (inchangé)
+                # Filtrage strict si guillemets (inchangé)
                 if keyword.startswith('"') and keyword.endswith('"'):
                     strict_words = keyword.strip('"').lower().split()
 
@@ -404,29 +384,28 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                         title = (video.get('title') or '').lower()
                         description = (video.get('description') or '').lower()
                         full_text = title + ' ' + description
-
                         if all(word in full_text for word in strict_words):
                             videos_temp.append(video)
 
                     videos = videos_temp
                     st.info(f"🔍 Recherche stricte \"{keyword.strip('\"')}\" : {len(videos)} vidéos")
 
-                # ✅ FILTRAGE LANGUE (NOUVEAU : anti-rejet massif)
+                # ✅ FILTRAGE LANGUE (FIX)
                 if language != "Auto (toutes langues)":
-                    target_lang_code = {"Français": "fr", "Anglais": "en", "Espagnol": "es"}.get(language)
+                    target = {"Français": "fr", "Anglais": "en", "Espagnol": "es"}.get(language)
 
                     kept = []
                     rejected = 0
                     examples = []
 
                     for v in videos:
-                        keep, why = guess_language_keep(v, target_lang_code)
+                        keep, why = keep_by_language(v, target)
                         if keep:
                             kept.append(v)
                         else:
                             rejected += 1
-                            if len(examples) < 5:
-                                examples.append((v.get("title", "")[:70], why))
+                            if len(examples) < 6:
+                                examples.append((v.get("title", "")[:80], why))
 
                     videos = kept
                     st.info(f"🌍 {len(videos)} vidéos gardées en {language} | ❌ {rejected} rejetées")
@@ -438,7 +417,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
 
                 progress_bar.progress(30)
 
-                # Filtrer par vues + autres (inchangé)
+                # Filtrer vues + autres (inchangé)
                 for video in videos:
                     views = video.get('view_count', 0) or 0
                     likes = video.get('like_count', 0) or 0
@@ -474,7 +453,6 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                             duration_match = True
                         if "long" in duration_filters and duration > 1200:
                             duration_match = True
-
                         if not duration_match:
                             continue
 
@@ -489,6 +467,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
             st.success(f"✅ {len(all_videos_filtered)} vidéo(s) trouvée(s) pour {len(keywords_list)} mot(s)-clé(s)!")
             st.divider()
 
+            # Compilation commentaires
             progress_bar.progress(60)
             status.text("📝 Compilation des données...")
 
@@ -496,7 +475,6 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                 video_id = video['id']
                 video_title = video['title']
                 keyword = video.get('search_keyword', '')
-
                 for comment in video.get('top_comments', []):
                     all_comments_list.append({
                         'video': video_title,
@@ -511,7 +489,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
 
             left_col, right_col = st.columns([1, 2])
 
-            # === GAUCHE: SECTION COPIE ===
+            # === GAUCHE
             with left_col:
                 st.header("📋 Copie en bas")
                 st.divider()
@@ -556,7 +534,7 @@ Voici les commentaires :"""
 
                 st.text_area("Copie-colle ceci dans ChatGPT:", value=copy_text, height=400, key="copy_area")
 
-            # === DROITE: VIDÉOS ===
+            # === DROITE
             with right_col:
                 st.header(f"📹 Vidéos ({len(all_videos_filtered)} trouvées)")
 
