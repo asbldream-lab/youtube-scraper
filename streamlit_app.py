@@ -7,19 +7,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 from collections import Counter
 
+# Configuration
 st.set_page_config(page_title="YouTube Scraper Pro", layout="wide")
 st.title("🚀 YouTube Keyword Research Tool PRO")
 
 # ==========================================
-# ✅ LISTES DE MOTS ET PARAMÈTRES DE LANGUE
+# ✅ MOTEUR DE LANGUE RENFORCÉ (SPÉCIAL ES/FR)
 # ==========================================
 
-FR_WORDS = {"le","la","les","un","une","des","du","de","et","ou","est","dans","sur","avec","pour","par","en","au","aux","qui","que","ce","cette"}
-EN_WORDS = {"the","and","is","in","on","at","to","for","of","with","that","this","it","you","are","was","were"}
-ES_WORDS = {"el","la","los","las","un","una","y","o","es","en","con","para","por","de","del","al","este","esta"}
+FR_WORDS = {"le","la","les","un","une","des","du","de","et","ou","est","dans","sur","avec","pour","par","en","au","aux","qui","que","ce","cette","mais","donc"}
+EN_WORDS = {"the","and","is","in","on","at","to","for","of","with","that","this","it","you","are","was","were","how","why","from"}
+# Dictionnaire Espagnol étendu pour éviter les confusions avec le FR
+ES_WORDS = {"el","la","los","las","un","una","unos","unas","y","o","es","en","con","para","por","de","del","al","este","esta","que","como","su","sus","lo","se","no","si","pero","todo"}
 
 ACCENT_FR = set("àâäçéèêëîïôöùûüÿœæ")
-ACCENT_ES = set("áéíóúñü¡¿")
+ACCENT_ES = set("áéíóúñü¡¿") # Inclus le ñ et les signes inversés
 
 def _clean_text(s: str) -> str:
     if not s: return ""
@@ -37,176 +39,126 @@ def _has_caption(info: dict, lang: str) -> bool:
     return False
 
 def keep_by_language(info: dict, target: str):
-    """
-    Système de scoring pour éviter le rejet massif sur mots uniques.
-    """
-    if target == "auto": return True, "✅ Mode Auto"
-
+    """Calcule un score de probabilité précis pour éviter les rejets sur mots uniques."""
+    if not target or target == "auto": return True, "Mode Auto"
+    
     title = (info.get("title") or "").lower()
     desc = (info.get("description") or "").lower()
-    uploader = (info.get("uploader") or "").lower()
-    
-    # 1. Vérification Métadonnées YouTube (Signal fort)
     yt_lang = (info.get("language") or "").lower()
-    if yt_lang.startswith(target):
-        return True, f"✅ Confirmé par YouTube ({yt_lang})"
 
-    # 2. Vérification Captions (Signal fort)
-    if _has_caption(info, target):
-        return True, f"✅ Confirmé par Sous-titres ({target})"
-
-    # 3. Analyse du texte (Titre + Description + Commentaires)
-    # On récupère les commentaires pour enrichir le texte à analyser
-    comments_text = ""
-    for c in info.get("top_comments", []):
-        comments_text += " " + (c.get("text") or "")
+    # 1. YouTube metadata (Signal de confiance 100%)
+    if yt_lang.startswith(target): return True, f"YouTube Meta: {yt_lang}"
     
-    full_blob = title + " " + desc[:500] + " " + comments_text
-    tokens = _clean_text(full_blob).split()
+    # 2. Captions (Signal de confiance 95%)
+    if _has_caption(info, target): return True, f"Captions: {target}"
 
-    # Si le texte est trop court (ex: mot unique), on ne rejette pas.
-    if len(tokens) < 15:
-        return True, "✅ Gardé (Texte trop court pour juger)"
+    # 3. Analyse lexicale profonde
+    text_blob = title + " " + desc[:700]
+    tokens = _clean_text(text_blob).split()
 
-    # Comptage des points
-    hits = {"fr": 0, "en": 0, "es": 0}
-    for t in tokens:
-        if t in FR_WORDS: hits["fr"] += 1
-        if t in EN_WORDS: hits["en"] += 1
-        if t in ES_WORDS: hits["es"] += 1
+    if len(tokens) < 10: 
+        return True, "Texte trop court (Gardé par défaut)"
+
+    hits = {
+        "fr": sum(1 for t in tokens if t in FR_WORDS),
+        "en": sum(1 for t in tokens if t in EN_WORDS),
+        "es": sum(1 for t in tokens if t in ES_WORDS)
+    }
     
-    # Accents
-    accents = {"fr": sum(1 for ch in full_blob if ch in ACCENT_FR),
-               "es": sum(1 for ch in full_blob if ch in ACCENT_ES)}
+    accents = {
+        "fr": sum(1 for ch in text_blob if ch in ACCENT_FR),
+        "es": sum(1 for ch in text_blob if ch in ACCENT_ES)
+    }
 
-    # Calcul score final
-    score_target = hits.get(target, 0) + (accents.get(target, 0) * 0.5)
+    # Calcul du score : les accents valent cher en espagnol
+    score_target = hits.get(target, 0) + (accents.get(target, 0) * 1.5)
     
-    # Trouver la meilleure langue concurrente
+    # Comparaison avec les autres langues
     other_langs = [l for l in hits.keys() if l != target]
-    max_other = max([hits[l] + (accents.get(l, 0) * 0.5) for l in other_langs])
+    max_other = max([hits[l] + (accents.get(l, 0) * 1.5) for l in other_langs]) if other_langs else 0
 
-    # Rejet uniquement si une autre langue domine outrageusement
-    if max_other > score_target + 10:
-        return False, f"❌ Rejet (Dominé par une autre langue: {max_other} vs {score_target})"
+    # On rejette seulement si une autre langue est archi-dominante (marge de 15 points)
+    if max_other > score_target + 15:
+        return False, f"Rejet ({max_other} vs {score_target})"
 
-    return True, f"✅ Score acceptable ({score_target} vs {max_other})"
+    return True, f"Score OK ({score_target})"
 
 # ============ SIDEBAR ============
 st.sidebar.header("⚙️ Paramètres")
 
-keywords_input = st.sidebar.text_area(
-    "🔍 Mots-clés (un par ligne) :",
-    placeholder="guerre irak\n\"conflit starlink\"",
-    help="Mets des guillemets pour une recherche exacte"
-)
+keywords_input = st.sidebar.text_area("🔍 Mots-clés (un par ligne) :", placeholder="guerre irak\nguerra de las galaxias")
 keywords_list = [k.strip() for k in keywords_input.split('\n') if k.strip()]
 
-language_choice = st.sidebar.selectbox(
-    "🌍 Langue des résultats :",
-    ["Auto (toutes langues)", "Français", "Anglais", "Espagnol"]
-)
-
-# Configuration de la localisation pour la recherche yt-dlp
+language_choice = st.sidebar.selectbox("🌍 Langue cible :", ["Auto (toutes langues)", "Français", "Anglais", "Espagnol"])
+# Codes ISO et Régions pour forcer YouTube
 lang_map = {
     "Français": {"code": "fr", "region": "FR"},
     "Anglais": {"code": "en", "region": "US"},
     "Espagnol": {"code": "es", "region": "ES"},
-    "Auto (toutes langues)": {"code": None, "region": None}
+    "Auto (toutes langues)": {"code": "auto", "region": None}
 }
-selected_lang_config = lang_map[language_choice]
+selected_config = lang_map[language_choice]
 
 st.sidebar.write("### 👁️ Vues minimum")
 col1, col2, col3, col4 = st.sidebar.columns(4)
 selected_views = []
-with col1: 
-    if st.sidebar.checkbox("10K-50K"): selected_views.append((10000, 50000))
-with col2: 
-    if st.sidebar.checkbox("50K-100K"): selected_views.append((50000, 100000))
-with col3: 
-    if st.sidebar.checkbox("100K+"): selected_views.append((100000, 1000000))
-with col4: 
-    if st.sidebar.checkbox("1M+"): selected_views.append((1000000, float('inf')))
+if st.sidebar.checkbox("10K-50K"): selected_views.append((10000, 50000))
+if st.sidebar.checkbox("50K-100K"): selected_views.append((50000, 100000))
+if st.sidebar.checkbox("100K+"): selected_views.append((100000, 1000000))
+if st.sidebar.checkbox("1M+"): selected_views.append((1000000, float('inf')))
 
-st.sidebar.write("### 📈 Engagement / Date / Durée")
-use_engagement = st.sidebar.checkbox("Filtrer par % likes/vues")
-min_engagement = st.sidebar.slider("Minimum (%)", 0.0, 10.0, 1.0) if use_engagement else 0.0
+st.sidebar.write("### 📈 Engagement & Période")
+use_engagement = st.sidebar.checkbox("Filtrer Engagement")
+min_engagement = st.sidebar.slider("% Min Like/Vue", 0.0, 10.0, 1.0) if use_engagement else 0.0
+date_filter = st.sidebar.selectbox("Date :", ["Toutes", "7 derniers jours", "30 derniers jours", "1 an"])
 
-date_filter = st.sidebar.selectbox("Période :", ["Toutes", "7 derniers jours", "30 derniers jours", "6 derniers mois", "1 an"])
-duration_filters = []
-col_d1, col_d2, col_d3 = st.sidebar.columns(3)
-with col_d1: 
-    if st.sidebar.checkbox("<5min"): duration_filters.append("short")
-with col_d2: 
-    if st.sidebar.checkbox("5-20min"): duration_filters.append("medium")
-with col_d3: 
-    if st.sidebar.checkbox("20min+"): duration_filters.append("long")
-
-# ============ BOUTON RECHERCHE ============
-if st.sidebar.button("🚀 Lancer l'analyse", use_container_width=True):
+# ============ LOGIQUE DE RECHERCHE ============
+if st.sidebar.button("🚀 LANCER L'ANALYSE EXPERTE", use_container_width=True):
     if not keywords_list or not selected_views:
-        st.error("❌ Mots-clés et Vues requis !")
+        st.error("❌ Mots-clés et gammes de vues requis !")
     else:
-        # OPTIMISATION RECHERCHE : On force YouTube à chercher dans la bonne langue
-        search_opts = {
-            'quiet': True, 'extract_flat': 'in_playlist', 'socket_timeout': 7, 'ignoreerrors': True,
-        }
-        if selected_lang_config['code']:
-            search_opts['extractor_args'] = {
-                'youtube': {
-                    'lang': [selected_lang_config['code']],
-                    'region': [selected_lang_config['region']]
-                }
-            }
-
-        YDL_SEARCH = YoutubeDL(search_opts)
+        target_code = selected_config["code"]
+        target_region = selected_config["region"]
         
-        # Instance pour les données complètes
-        YDL_FULL = YoutubeDL({
-            'quiet': True, 'socket_timeout': 10, 'ignoreerrors': True, 'skip_download': True,
+        # Options yt-dlp optimisées pour la langue choisie
+        YDL_OPTS = {
+            'quiet': True, 'ignoreerrors': True, 'skip_download': True,
             'writesubtitles': True, 'writeautomaticsub': True, 'getcomments': True,
             'subtitleslangs': ['fr', 'en', 'es'],
-            'extractor_args': {'youtube': {'max_comments': ['25']}}
-        })
+            'extractor_args': {
+                'youtube': {
+                    'max_comments': ['30'],
+                    'lang': [target_code] if target_code != 'auto' else [],
+                    'region': [target_region] if target_region else []
+                }
+            }
+        }
 
         progress_bar = st.progress(0)
         status = st.empty()
-
         all_videos_filtered = []
-        all_comments_list = []
 
         try:
-            for keyword_idx, keyword in enumerate(keywords_list):
-                status.text(f"🔍 Recherche YouTube : {keyword}")
-                results = YDL_SEARCH.extract_info(f"ytsearch40:{keyword}", download=False)
-                entries = [v for v in results.get('entries', []) if v is not None]
+            for kw in keywords_list:
+                status.text(f"🔍 Recherche YouTube ({language_choice}) : {kw}")
+                with YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
+                    search_res = ydl.extract_info(f"ytsearch40:{kw}", download=False)
+                    entries = search_res.get('entries', [])
 
-                def fetch_parallel(vid):
+                def fetch_full_data(v):
                     try:
-                        info = YDL_FULL.extract_info(f"https://www.youtube.com/watch?v={vid['id']}", download=False)
-                        if info:
-                            info['search_keyword'] = keyword
-                            # Extraction rapide des commentaires pour le filtrage langue
-                            raw_comments = info.get('comments', [])
-                            info['top_comments'] = sorted(raw_comments, key=lambda x: x.get('like_count', 0) or 0, reverse=True)[:20]
-                            return info
+                        with YoutubeDL(YDL_OPTS) as ydl_full:
+                            return ydl_full.extract_info(f"https://www.youtube.com/watch?v={v['id']}", download=False)
                     except: return None
 
-                # Récupération Parallèle
-                videos_raw = []
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    futures = [executor.submit(fetch_parallel, v) for v in entries]
-                    for f in as_completed(futures):
-                        res = f.result()
-                        if res: videos_raw.append(res)
-
-                # FILTRAGE LANGUE ET VUES
-                target_code = selected_lang_config['code']
-                for v in videos_raw:
+                with ThreadPoolExecutor(max_workers=12) as executor:
+                    results = list(executor.map(fetch_full_data, entries))
+                
+                for v in [r for r in results if r]:
                     # 1. Filtre Langue
-                    keep, why = keep_by_language(v, target_code if target_code else "auto")
+                    keep, why = keep_by_language(v, target_code)
                     if not keep: continue
-
+                    
                     # 2. Filtre Vues
                     v_views = v.get('view_count', 0) or 0
                     if not any(m <= v_views <= x for m, x in selected_views): continue
@@ -216,46 +168,69 @@ if st.sidebar.button("🚀 Lancer l'analyse", use_container_width=True):
                         ratio = (v.get('like_count', 0) or 0) / v_views * 100 if v_views > 0 else 0
                         if ratio < min_engagement: continue
 
-                    # 4. Filtre Date
-                    if date_filter != "Toutes":
-                        days_map = {"7 derniers jours": 7, "30 derniers jours": 30, "6 derniers mois": 180, "1 an": 365}
-                        limit = datetime.now() - timedelta(days=days_map[date_filter])
-                        v_date = datetime.strptime(v.get('upload_date', '19000101'), '%Y%m%d')
-                        if v_date < limit: continue
-
+                    v['search_keyword'] = kw
                     all_videos_filtered.append(v)
 
-            # AFFICHAGE DES RÉSULTATS (Layout original respecté)
-            if not all_videos_filtered:
-                st.warning("⚠️ Aucune vidéo ne correspond à vos filtres.")
-            else:
-                st.success(f"✅ {len(all_videos_filtered)} vidéos trouvées.")
+            # === INTERFACE DE SORTIE ===
+            if all_videos_filtered:
+                st.success(f"✅ Analyse terminée : {len(all_videos_filtered)} vidéos trouvées.")
                 
-                # Compilation des commentaires pour le Prompt
-                for v in all_videos_filtered:
-                    for c in v['top_comments']:
-                        all_comments_list.append({
-                            'video_id': v['id'], 'author': c.get('author'), 
-                            'text': c.get('text'), 'likes': c.get('like_count', 0),
-                            'keyword': v['search_keyword']
-                        })
+                left_col, right_col = st.columns([1, 2])
 
-                l_col, r_col = st.columns([1, 2])
-                with l_col:
-                    st.header("📋 Prompt ChatGPT")
-                    # (Le bloc prompt original est ici condensé pour la lisibilité)
-                    st.text_area("Copie ce texte :", value=f"Analyse ces {len(all_comments_list)} commentaires...", height=400)
+                # --- GAUCHE : LE PROMPT COMPLET ---
+                with left_col:
+                    st.header("📋 Prompt Expert ChatGPT")
+                    
+                    prompt_txt = """Rôle : Tu es un expert en analyse de données sociales et en stratégie de contenu vidéo. Ton but est d'analyser les commentaires et les premières phrases des vidéos concurrentes pour en extraire une stratégie éditoriale unique.
 
-                with r_col:
-                    st.header("📹 Liste des vidéos")
+Contraintes de réponse :
+* Chaque section doit avoir le titre indiqué.
+* Chaque réponse sous les titres doit faire maximum 2 phrases.
+* Le ton doit être direct, efficace et sans remplissage.
+
+Instructions d'analyse :
+1. Angle de réponse stratégique : Identifie l'approche globale à adopter pour répondre aux attentes ou aux frustrations des utilisateurs.
+2. Top 5 des idées récurrentes : Liste les 5 thèmes ou arguments qui reviennent le plus souvent dans les commentaires.
+3. Sujets périphériques et opportunités : Propose des sujets connexes mentionnés par l'audience pour de futures vidéos.
+4. Éléments indispensables pour la vidéo : Liste les points précis ou questions auxquels tu dois absolument répondre.
+5. Analyse des accroches et nouveaux Hooks : Analyse la structure des phrases de début fournies pour proposer 3 nouveaux hooks originaux et percutants sans jamais copier les originaux.
+
+Voici les données collectées :
+"""
+                    # Compilation des données vidéos + commentaires
+                    full_data = f"\nRecherche : {', '.join(keywords_list)} | Langue : {language_choice}\n"
+                    for v in all_videos_filtered:
+                        full_data += f"\n--- VIDEO: {v.get('title')} ---\n"
+                        full_data += f"HOOK: {v.get('hook', 'Non extrait')}\n"
+                        for c in v.get('comments', [])[:15]:
+                            full_data += f"- {c.get('text')[:300]} ({c.get('like_count', 0)} likes)\n"
+                    
+                    st.text_area("Copie ce texte dans ChatGPT :", value=prompt_txt + full_data, height=600)
+
+                # --- DROITE : ANALYSE VISUELLE ---
+                with right_col:
+                    st.header("📹 Analyse des Vidéos")
                     for v in sorted(all_videos_filtered, key=lambda x: x.get('view_count', 0), reverse=True):
-                        with st.expander(f"👁️ {v.get('view_count', 0):,} | {v.get('title')[:70]}..."):
-                            st.image(v.get('thumbnail'), width=300)
-                            st.write(f"**Chaîne:** {v.get('uploader')} | **Engagement:** {(v.get('like_count', 0)/v.get('view_count', 1)*100):.2f}%")
-                            st.info(f"**Accroche (Hook):** {v.get('hook', 'Non dispo')}")
-                            st.write(f"[Lien YouTube](https://www.youtube.com/watch?v={v['id']})")
+                        subs = v.get('channel_follower_count', 0) or 1
+                        v_views = v.get('view_count', 0) or 0
+                        virality = v_views / subs
+                        stars = "⭐⭐⭐" if virality > 1.2 else ("⭐⭐" if virality > 0.6 else "⭐")
+                        
+                        with st.expander(f"{stars} | {v_views:,} vues | {v.get('title')[:60]}..."):
+                            c1, c2 = st.columns([1, 2])
+                            with c1:
+                                st.image(v.get('thumbnail'), use_container_width=True)
+                            with c2:
+                                st.write(f"**Chaîne :** {v.get('uploader')} ({subs:,} abonnés)")
+                                st.write(f"**Succès :** {virality:.1f}x la taille de la base fans")
+                                st.write(f"**Lien :** [Ouvrir YouTube]({v.get('webpage_url')})")
+                            
+                            st.subheader("💬 Commentaires Clés")
+                            for c in v.get('comments', [])[:5]:
+                                st.write(f"👉 {c.get('text')[:200]}... ({c.get('like_count', 0)} 👍)")
 
             progress_bar.progress(100)
-
+            status.text("Traitement terminé.")
+            
         except Exception as e:
-            st.error(f"❌ Erreur critique : {e}")
+            st.error(f"Une erreur est survenue : {e}")
