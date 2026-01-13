@@ -180,15 +180,33 @@ Livrable attendu :
                     copy_text += "\n[Aucun commentaire trouvé]"
                 
                 # AFFICHER LA ZONE DE COPIE
-                st.text_area("Copie-colle ceci dans ChatGPT:", value=copy_text, height=600)
+                st.text_area("Copie-colle ceci dans ChatGPT:", value=copy_text, height=600, key="copy_area")
                 
-                # BOUTON TÉLÉCHARGER
-                st.download_button(
-                    label="📥 Télécharger",
-                    data=copy_text,
-                    file_name=f"prompt_commentaires_{keyword.replace(' ', '_')}.txt",
-                    use_container_width=True
-                )
+                # BOUTON COPIER avec JavaScript
+                copy_button_html = f"""
+                <script>
+                function copyToClipboard() {{
+                    const text = `{copy_text.replace('`', '\\`').replace('$', '\\$')}`;
+                    navigator.clipboard.writeText(text).then(function() {{
+                        alert('✅ Texte copié dans le presse-papiers!');
+                    }}, function(err) {{
+                        alert('❌ Erreur lors de la copie');
+                    }});
+                }}
+                </script>
+                <button onclick="copyToClipboard()" style="
+                    background-color: #FF4B4B;
+                    color: white;
+                    padding: 10px 20px;
+                    border: none;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 16px;
+                    width: 100%;
+                    font-weight: bold;
+                ">📋 Copier le texte</button>
+                """
+                st.markdown(copy_button_html, unsafe_allow_html=True)
             
             # === DROITE: VIDÉOS ===
             with right_col:
