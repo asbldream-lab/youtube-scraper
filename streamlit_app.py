@@ -3,6 +3,7 @@ from yt_dlp import YoutubeDL
 import json
 from datetime import datetime, timedelta
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 st.set_page_config(page_title="YouTube Scraper Pro", layout="wide")
 st.title("🚀 YouTube Keyword Research Tool PRO")
@@ -138,31 +139,42 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                 
                 progress_bar.progress(10 + int((keyword_idx / len(keywords_list)) * 10))
                 
-                # Récupérer métadonnées - PARALLÈLE
-                status.text(f"📊 Stats: {keyword}")
+                # Récupérer métadonnées - MULTITHREADING ⚡
+                status.text(f"📊 Stats: {keyword} (parallèle)...")
                 
-                ydl_opts_views = {
-                    'quiet': True,
-                    'no_warnings': True,
-                    'socket_timeout': 5,  # RÉDUIT
-                    'ignoreerrors': True,
-                    'skip_download': True,
-                }
-                
-                videos = []
-                for vid in video_ids:
+                def fetch_video_metadata(vid, keyword):
+                    """Fonction pour récupérer les métadonnées d'une vidéo"""
                     try:
                         video_id = vid.get('id')
                         if not video_id:
-                            continue
+                            return None
                         
-                        with YoutubeDL(ydl_opts_views) as ydl:
+                        ydl_opts = {
+                            'quiet': True,
+                            'no_warnings': True,
+                            'socket_timeout': 5,
+                            'ignoreerrors': True,
+                            'skip_download': True,
+                        }
+                        
+                        with YoutubeDL(ydl_opts) as ydl:
                             info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
                             if info:
                                 info['search_keyword'] = keyword
-                                videos.append(info)
+                                return info
                     except:
-                        continue
+                        return None
+                    return None
+                
+                # Lancer en parallèle avec 10 threads
+                videos = []
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    futures = {executor.submit(fetch_video_metadata, vid, keyword): vid for vid in video_ids}
+                    
+                    for future in as_completed(futures):
+                        result = future.result()
+                        if result:
+                            videos.append(result)
                 
                 # FILTRAGE STRICT PAR LANGUE
                 if language != "Auto (toutes langues)":
@@ -277,18 +289,20 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
             st.success(f"✅ {len(all_videos_filtered)} vidéo(s) trouvée(s) pour {len(keywords_list)} mot(s)-clé(s)!")
             st.divider()
             
-            # RÉCUPÉRER COMMENTAIRES + SOUS-TITRES
-            status.text("💬 Récupération commentaires + sous-titres...")
+            # RÉCUPÉRER COMMENTAIRES + SOUS-TITRES - MULTITHREADING ⚡
+            status.text("💬 Récupération (parallèle)...")
             progress_bar.progress(40)
             
-            failed_videos = []
-            
-            for idx, video in enumerate(all_videos_filtered):
-                progress_bar.progress(40 + int((idx / len(all_videos_filtered)) * 40))
-                status.text(f"💬 Vidéo {idx+1}/{len(all_videos_filtered)}...")
-                
+            def fetch_video_data(video):
+                """Fonction pour récupérer commentaires + sous-titres d'une vidéo"""
                 video_id = video['id']
                 video_title = video['title']
+                result = {
+                    'video': video,
+                    'comments': [],
+                    'hook': 'Sous-titres non disponibles',
+                    'failed': False
+                }
                 
                 # RÉCUPÉRER SOUS-TITRES (HOOK)
                 hook_text = ""
@@ -299,18 +313,16 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                         'socket_timeout': 5,
                         'writesubtitles': True,
                         'writeautomaticsub': True,
-                        'subtitleslangs': ['fr', 'en', 'es'],  # Ajout espagnol
+                        'subtitleslangs': ['fr', 'en', 'es'],
                         'skip_download': True,
                         'ignoreerrors': True,
                     })
                     
                     info_subs = ydl_subs.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
                     
-                    # Chercher les sous-titres
                     subtitles = info_subs.get('subtitles', {})
                     auto_subs = info_subs.get('automatic_captions', {})
                     
-                    # Essayer français, anglais, espagnol
                     subtitle_data = None
                     for lang in ['fr', 'en', 'es', 'fr-FR', 'en-US', 'es-ES']:
                         if lang in subtitles:
@@ -320,31 +332,27 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                             subtitle_data = auto_subs[lang]
                             break
                     
-                    # Extraire le texte des 30 premières secondes (hook)
                     if subtitle_data:
-                        # Prendre le premier format (généralement json3)
                         sub_url = subtitle_data[0]['url'] if subtitle_data else None
                         if sub_url:
                             response = requests.get(sub_url, timeout=5)
                             if response.status_code == 200:
                                 try:
-                                    # Format json3
                                     sub_json = json.loads(response.text)
                                     events = sub_json.get('events', [])
                                     hook_sentences = []
-                                    for event in events[:10]:  # ~30 premières secondes
+                                    for event in events[:10]:
                                         if 'segs' in event:
                                             text = ''.join([seg.get('utf8', '') for seg in event['segs']])
                                             if text.strip():
                                                 hook_sentences.append(text.strip())
-                                    hook_text = ' '.join(hook_sentences[:5])  # 5 premières phrases max
+                                    hook_text = ' '.join(hook_sentences[:5])
                                 except:
                                     pass
                 except:
                     pass
                 
-                # Stocker le hook dans la vidéo
-                video['hook'] = hook_text if hook_text else "Sous-titres non disponibles"
+                result['hook'] = hook_text if hook_text else "Sous-titres non disponibles"
                 
                 # RÉCUPÉRER COMMENTAIRES
                 try:
@@ -364,7 +372,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                         comments_sorted = sorted(comments, key=lambda x: x.get('like_count', 0) or 0, reverse=True)[:20]
                         
                         for comment in comments_sorted:
-                            all_comments_list.append({
+                            result['comments'].append({
                                 'video': video_title,
                                 'video_id': video_id,
                                 'keyword': video.get('search_keyword', ''),
@@ -373,10 +381,34 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                                 'likes': comment.get('like_count', 0) or 0
                             })
                     else:
-                        failed_videos.append(video_title)
+                        result['failed'] = True
                 except:
-                    failed_videos.append(video_title)
-                    continue
+                    result['failed'] = True
+                
+                return result
+            
+            # Lancer en parallèle avec 5 threads
+            failed_videos = []
+            completed = 0
+            
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {executor.submit(fetch_video_data, video): video for video in all_videos_filtered}
+                
+                for future in as_completed(futures):
+                    completed += 1
+                    progress_bar.progress(40 + int((completed / len(all_videos_filtered)) * 40))
+                    status.text(f"💬 Vidéo {completed}/{len(all_videos_filtered)}...")
+                    
+                    result = future.result()
+                    
+                    # Stocker le hook dans la vidéo
+                    result['video']['hook'] = result['hook']
+                    
+                    # Ajouter les commentaires
+                    all_comments_list.extend(result['comments'])
+                    
+                    if result['failed'] and not result['comments']:
+                        failed_videos.append(result['video']['title'])
             
             progress_bar.progress(90)
             
