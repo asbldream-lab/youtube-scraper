@@ -169,10 +169,10 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                     videos_temp = []
                     
                     for video in videos:
-                        video_lang = video.get('language', '').lower()
-                        title = video.get('title', '').lower()
-                        description = video.get('description', '').lower() if video.get('description') else ''
-                        uploader = video.get('uploader', '').lower()
+                        video_lang = (video.get('language') or '').lower()
+                        title = (video.get('title') or '').lower()
+                        description = (video.get('description') or '').lower()
+                        uploader = (video.get('uploader') or '').lower()
                         
                         # Détection stricte par langue
                         if language == "Français":
