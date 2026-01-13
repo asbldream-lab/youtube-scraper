@@ -116,7 +116,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                     'ignoreerrors': True,
                 }
                 
-                search_limit = 15  # RÉDUIT pour vitesse
+                search_limit = 40  # Augmenté pour avoir plus de choix après filtrage langue
                 
                 if language == "Français":
                     ydl_opts_fast['extractor_args'] = {'youtube': {'lang': ['fr']}}
@@ -163,6 +163,63 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                                 videos.append(info)
                     except:
                         continue
+                
+                # FILTRAGE STRICT PAR LANGUE
+                if language != "Auto (toutes langues)":
+                    videos_temp = []
+                    
+                    for video in videos:
+                        video_lang = video.get('language', '').lower()
+                        title = video.get('title', '').lower()
+                        description = video.get('description', '').lower() if video.get('description') else ''
+                        uploader = video.get('uploader', '').lower()
+                        
+                        # Détection stricte par langue
+                        if language == "Français":
+                            # Indicateurs français
+                            french_indicators = ['à', 'é', 'è', 'ê', 'ç', 'où', 'français', 'france']
+                            is_french = (
+                                video_lang in ['fr', 'fr-fr', 'fr-ca'] or
+                                any(ind in title + description + uploader for ind in french_indicators) or
+                                'fr' in uploader
+                            )
+                            # Exclure clairement anglais/espagnol
+                            is_english = video_lang in ['en', 'en-us', 'en-gb'] or ' the ' in title or ' and ' in title
+                            is_spanish = video_lang in ['es', 'es-es', 'es-mx'] or '¿' in title or '¡' in title
+                            
+                            if is_french and not is_english and not is_spanish:
+                                videos_temp.append(video)
+                        
+                        elif language == "Anglais":
+                            # Indicateurs anglais
+                            is_english = (
+                                video_lang in ['en', 'en-us', 'en-gb'] or
+                                ' the ' in title or ' and ' in title or ' is ' in title
+                            )
+                            # Exclure français/espagnol
+                            is_french = video_lang in ['fr', 'fr-fr'] or 'français' in title
+                            is_spanish = video_lang in ['es', 'es-es'] or '¿' in title or '¡' in title
+                            
+                            if is_english and not is_french and not is_spanish:
+                                videos_temp.append(video)
+                        
+                        elif language == "Espagnol":
+                            # Indicateurs espagnol
+                            spanish_indicators = ['¿', '¡', 'español', 'méxico', 'latinoamérica']
+                            is_spanish = (
+                                video_lang in ['es', 'es-es', 'es-mx', 'es-ar', 'es-co', 'es-cl'] or
+                                any(ind in title + description + uploader for ind in spanish_indicators) or
+                                'ñ' in title or 'ñ' in uploader
+                            )
+                            # Exclure clairement anglais/français
+                            is_english = video_lang in ['en', 'en-us', 'en-gb'] or ' the ' in title
+                            is_french = video_lang in ['fr', 'fr-fr'] or 'français' in title
+                            
+                            if is_spanish and not is_english and not is_french:
+                                videos_temp.append(video)
+                    
+                    videos = videos_temp
+                    st.info(f"🌍 {len(videos)} vidéos en {language} après filtrage strict")
                 
                 progress_bar.progress(20)
                 
