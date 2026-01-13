@@ -213,16 +213,19 @@ Livrable attendu :
                 else:
                     copy_text += "\n[Aucun commentaire trouvé]"
                 
-                # BOUTON COPIER en haut
+                # BOUTON COPIER en haut - utilise le texte directement
                 with col_button:
-                    # Utiliser un ID unique pour éviter les conflits
+                    # Échapper correctement le texte pour JavaScript
+                    copy_text_escaped = copy_text.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$').replace('\n', '\\n').replace('\r', '\\r').replace('"', '\\"')
+                    
                     copy_button_top = f"""
                     <script>
                     function copyToClipboardTop() {{
-                        const text = document.getElementById('copy_area').value;
+                        const text = "{copy_text_escaped}";
                         navigator.clipboard.writeText(text).then(function() {{
                             alert('✅ Texte copié!');
                         }}, function(err) {{
+                            console.error('Erreur:', err);
                             alert('❌ Erreur lors de la copie');
                         }});
                     }}
