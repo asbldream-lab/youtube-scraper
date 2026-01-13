@@ -6,55 +6,70 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 
+# ==========================================
+# ✅ CONFIGURATION & SESSION STATE
+# ==========================================
 st.set_page_config(page_title="YouTube Scraper Pro", layout="wide")
 st.title("🚀 YouTube Keyword Research Tool PRO")
 
-# Initialisation session state (RESTAURÉ)
 if 'search_history' not in st.session_state:
     st.session_state.search_history = []
 
 # ==========================================
-# ✅ LOGIQUE DE FILTRAGE LANGUE (SÉCURISÉE)
+# ✅ NOUVEAU MOTEUR DE LANGUE (ANTI-ERREUR)
 # ==========================================
-def check_lang_match(info, target_lang):
+def is_valid_language(info, target_lang):
     if target_lang == "Auto (toutes langues)": return True
     
     title = (info.get('title') or "").lower()
     desc = (info.get('description') or "").lower()
     full_text = title + " " + desc[:500]
     
-    # Dictionnaires de survie
+    # Signaux spécifiques
     rules = {
-        "Français": {"chars": "éàèçôû", "words": [" le ", " la ", " les ", " est ", " avec "], "code": "fr"},
+        "Français": {"chars": "éàèçôû", "words": [" le ", " la ", " les ", " est "], "code": "fr"},
         "Espagnol": {"chars": "ñáéíóú¡¿", "words": [" el ", " los ", " con ", " para ", " por "], "code": "es"},
         "Anglais": {"chars": "", "words": [" the ", " and ", " with ", " from "], "code": "en"}
     }
     
     r = rules.get(target_lang)
-    # 1. Vérification YouTube Meta
+    if not r: return True
+
+    # 1. Vérification Meta YouTube
     yt_lang = (info.get('language') or "").lower()
     if yt_lang.startswith(r['code']): return True
-    
-    # 2. Vérification Caractères spéciaux
-    if r['chars'] and any(c in full_text for c in r['chars']): return True
-    
-    # 3. Vérification Mots outils
-    if any(w in full_text for w in r['words']): return True
-    
-    # 4. Anti-Anglais (Si on veut FR ou ES mais qu'on voit "the" ou "how to")
+
+    # 2. ANTI-ANGLAIS : Si on veut ES ou FR mais que le titre contient "How to", "Review" ou "The"
     if target_lang in ["Français", "Espagnol"]:
-        if any(w in title for w in ["the", "how to", "unboxing", "review"]): return False
-        
+        if any(w in title for w in ["the ", "how to", "unboxing", "review", "bought"]):
+            return False
+
+    # 3. Vérification Caractères & Mots outils
+    if r['chars'] and any(c in full_text for c in r['chars']): return True
+    if any(w in full_text for w in r['words']): return True
+
+    # 4. Vérification des sous-titres (Preuve finale)
+    if r['code'] in (info.get('automatic_captions') or {}) or r['code'] in (info.get('subtitles') or {}):
+        return True
+
     return False
 
 # ============ SIDEBAR ============
 st.sidebar.header("⚙️ Paramètres")
 
-keywords_input = st.sidebar.text_area("🔍 Mots-clés (un par ligne):", placeholder="guerre irak\nstarlink")
+keywords_input = st.sidebar.text_area(
+    "🔍 Mots-clés (un par ligne):",
+    placeholder="guerre irak\nstarlink",
+    help="Entre plusieurs mots-clés, un par ligne"
+)
 keywords_list = [k.strip() for k in keywords_input.split('\n') if k.strip()]
 
-language = st.sidebar.selectbox("🌍 Langue:", ["Auto (toutes langues)", "Français", "Anglais", "Espagnol"])
+language = st.sidebar.selectbox(
+    "🌍 Langue:",
+    ["Auto (toutes langues)", "Français", "Anglais", "Espagnol"]
+)
 
+# VUES (Structure Originale Restaurée)
 st.sidebar.write("### 👁️ Vues minimum")
 col1, col2, col3, col4 = st.sidebar.columns(4)
 selected_views = []
@@ -67,111 +82,124 @@ with col3:
 with col4:
     if st.sidebar.checkbox("1M+"): selected_views.append((1000000, float('inf')))
 
-# Ajout des filtres de durée demandés
-st.sidebar.write("### ⏱️ Durée minimum")
-min_duration_opt = st.sidebar.radio("Choisir :", ["Toutes", "Minimum 2 min", "Minimum 5 min"])
+# DURÉE (Nouveau Filtre demandé)
+st.sidebar.write("### ⏱️ Durée de la vidéo")
+min_duration = st.sidebar.radio("Minimum :", ["Toutes", "Minimum 2 min", "Minimum 5 min"])
 
-st.sidebar.write("### 📈 Ratio Engagement")
+# ENGAGEMENT & DATE
+st.sidebar.write("### 📈 Ratio & Période")
 use_engagement = st.sidebar.checkbox("Filtrer par engagement")
-min_engagement = st.sidebar.slider("Like/Vue minimum (%)", 0.0, 10.0, 1.0) if use_engagement else 0.0
+min_engagement = st.sidebar.slider("Like/Vue min (%)", 0.0, 10.0, 1.0) if use_engagement else 0.0
 
-st.sidebar.write("### 📅 Date de publication")
-date_filter = st.sidebar.selectbox("Période:", ["Toutes", "7 derniers jours", "30 derniers jours", "6 derniers mois", "1 an"])
+date_filter = st.sidebar.selectbox(
+    "Période:",
+    ["Toutes", "7 derniers jours", "30 derniers jours", "6 derniers mois", "1 an"]
+)
 
 # ============ BOUTON RECHERCHE ============
-if st.sidebar.button("🚀 Lancer", use_container_width=True):
-    if not keywords_list:
-        st.error("❌ Au moins un mot-clé requis!")
-    elif not selected_views:
-        st.error("❌ Sélectionne une gamme de vues!")
+if st.sidebar.button("🚀 Lancer l'analyse", use_container_width=True):
+    if not keywords_list or not selected_views:
+        st.error("❌ Mots-clés et gammes de vues requis !")
     else:
         progress_bar = st.progress(0)
         status = st.empty()
         
-        # Calcul date limite
+        # Calcul Date
         date_limit = None
         if date_filter != "Toutes":
             days = {"7 derniers jours": 7, "30 derniers jours": 30, "6 derniers mois": 180, "1 an": 365}
             date_limit = datetime.now() - timedelta(days=days[date_filter])
-        
+
         all_videos_filtered = []
         all_comments_list = []
-        
-        try:
-            for kw in keywords_list:
-                status.text(f"🔍 Recherche: {kw}")
-                # Config recherche rapide
-                with YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
-                    search_results = ydl.extract_info(f"ytsearch40:{kw}", download=False).get('entries', [])
 
-                def fetch_video_details(v):
-                    with YoutubeDL({'quiet': True, 'getcomments': True, 'writesubtitles': True, 'skip_download': True}) as ydl_full:
-                        return ydl_full.extract_info(f"https://www.youtube.com/watch?v={v['id']}", download=False)
+        try:
+            for kw_idx, kw in enumerate(keywords_list):
+                status.text(f"🔍 Recherche YouTube : {kw}")
+                
+                # Recherche initiale
+                with YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
+                    search_res = ydl.extract_info(f"ytsearch40:{kw}", download=False).get('entries', [])
+
+                # Extraction complète en parallèle (Vitesse max)
+                def fetch_full(vid):
+                    opts = {
+                        'quiet': True, 'getcomments': True, 'writesubtitles': True, 
+                        'skip_download': True, 'ignoreerrors': True, 'socket_timeout': 10
+                    }
+                    with YoutubeDL(opts) as ydl_full:
+                        return ydl_full.extract_info(f"https://www.youtube.com/watch?v={vid['id']}", download=False)
 
                 with ThreadPoolExecutor(max_workers=10) as executor:
-                    full_infos = list(executor.map(fetch_video_details, search_results))
+                    full_infos = list(executor.map(fetch_full, search_results if 'search_results' in locals() else search_res))
 
                 for info in [f for f in full_infos if f]:
                     # 1. FILTRE LANGUE (CORRIGÉ)
-                    if not check_lang_match(info, language): continue
+                    if not is_valid_language(info, language): continue
                     
-                    # 2. FILTRE DURÉE (NOUVEAU)
-                    dur = info.get('duration', 0)
-                    if min_duration_opt == "Minimum 2 min" and dur < 120: continue
-                    if min_duration_opt == "Minimum 5 min" and dur < 300: continue
+                    # 2. FILTRE DURÉE (CORRIGÉ)
+                    v_dur = info.get('duration', 0)
+                    if min_duration == "Minimum 2 min" and v_dur < 120: continue
+                    if min_duration == "Minimum 5 min" and v_dur < 300: continue
 
-                    # 3. FILTRE VUES (RESTAURÉ)
-                    views = info.get('view_count', 0) or 0
-                    if not any(mn <= views <= mx for mn, mx in selected_views): continue
-                    
+                    # 3. FILTRE VUES
+                    v_views = info.get('view_count', 0) or 0
+                    if not any(mn <= v_views <= mx for mn, mx in selected_views): continue
+
                     # 4. FILTRE DATE
                     if date_limit:
-                        up_date = datetime.strptime(info.get('upload_date', '19000101'), '%Y%m%d')
-                        if up_date < date_limit: continue
+                        v_date = datetime.strptime(info.get('upload_date', '19000101'), '%Y%m%d')
+                        if v_date < date_limit: continue
 
                     info['search_keyword'] = kw
                     all_videos_filtered.append(info)
 
-            # === AFFICHAGE COLONNES (RESTAURÉ) ===
+            # === AFFICHAGE RÉSULTATS (Layout Original) ===
             if all_videos_filtered:
                 st.success(f"✅ {len(all_videos_filtered)} vidéos trouvées.")
                 
-                # Compilation commentaires pour historique & prompt
-                for v in all_videos_filtered:
-                    for c in v.get('comments', [])[:20]:
-                        all_comments_list.append({
-                            'video': v['title'], 'video_id': v['id'], 'keyword': v['search_keyword'],
-                            'author': c.get('author'), 'text': c.get('text'), 'likes': c.get('like_count', 0)
-                        })
-
                 left_col, right_col = st.columns([1, 2])
-                
+
+                # GAUCHE : LE PROMPT COMPLET
                 with left_col:
                     st.header("📋 Copie en bas")
-                    prompt = "Rôle : Tu es un expert en analyse de données sociales... [Prompt Complet original]"
-                    # Ici tu peux remettre ton texte de prompt exact
-                    st.text_area("Copie pour ChatGPT:", value=prompt, height=400)
+                    prompt_expert = """Rôle : Tu es un expert en analyse de données sociales... [Mets ici ton texte de prompt original complet]"""
+                    
+                    data_blob = f"\nMots-clés : {', '.join(keywords_list)}\n"
+                    for v in all_videos_filtered:
+                        data_blob += f"\n--- VIDEO: {v['title']} ---\n"
+                        for c in v.get('comments', [])[:15]:
+                            data_blob += f"- {c.get('text')} ({c.get('like_count')} likes)\n"
+                    
+                    st.text_area("Copie pour ChatGPT :", value=prompt_expert + data_blob, height=500)
 
+                # DROITE : LES VIDÉOS
                 with right_col:
-                    st.header(f"📹 Vidéos")
+                    st.header("📹 Vidéos")
                     for idx, v in enumerate(all_videos_filtered, 1):
                         subs = v.get('channel_follower_count', 0) or 1
-                        v_views = v.get('view_count', 0)
-                        stars = "⭐⭐⭐" if v_views > subs else "⭐"
-                        with st.expander(f"Vidéo {idx}: {v['title'][:50]}... | 👁️ {v_views:,} | {stars}"):
-                            st.image(v.get('thumbnail'), width=200)
-                            st.write(f"**Hook:** {v.get('hook', 'N/A')}")
-                            st.write(f"[Lien]({v['webpage_url']})")
+                        ratio = v.get('view_count', 0) / subs
+                        stars = "⭐⭐⭐" if ratio > 1 else "⭐"
+                        with st.expander(f"#{idx} | {stars} | {v.get('view_count'):,} vues | {v['title'][:60]}..."):
+                            st.image(v.get('thumbnail'), width=250)
+                            st.write(f"**Chaîne :** {v.get('uploader')}")
+                            st.write(f"**Lien :** [Regarder]({v.get('webpage_url')})")
 
-            # SAUVEGARDE HISTORIQUE (RESTAURÉ)
-            st.session_state.search_history.append({'date': datetime.now().strftime('%d/%m %H:%M'), 'kw': keywords_list, 'found': len(all_videos_filtered)})
+            # SAUVEGARDE HISTORIQUE
+            st.session_state.search_history.append({
+                'date': datetime.now().strftime('%d/%m %H:%M'),
+                'kw': keywords_list,
+                'found': len(all_videos_filtered)
+            })
             
             progress_bar.progress(100)
+            status.text("✅ Analyse terminée.")
+
         except Exception as e:
-            st.error(f"Erreur: {e}")
+            st.error(f"Erreur : {e}")
 
 # ============ HISTORIQUE (RESTAURÉ) ============
 if st.session_state.search_history:
-    with st.expander("📚 Historique"):
+    with st.expander("📚 Historique des recherches"):
         for h in reversed(st.session_state.search_history[-5:]):
-            st.write(f"{h['date']} - {h['kw']} ({h['found']} vidéos)")
+            st.write(f"📅 {h['date']} | 🔍 {h['kw']} | 📹 {h['found']} vidéos")
