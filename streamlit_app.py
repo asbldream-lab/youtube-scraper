@@ -2,33 +2,22 @@ import streamlit as st
 from yt_dlp import YoutubeDL
 import base64
 
-st.set_page_config(page_title="Social Media Scraper", layout="wide")
-st.title("🎬 YouTube & TikTok Keyword Research Tool")
+st.set_page_config(page_title="YouTube Scraper", layout="wide")
+st.title("🎬 YouTube Keyword Research Tool")
 
 if 'selected_views' not in st.session_state:
     st.session_state.selected_views = []
 
 # SIDEBAR
 st.sidebar.header("⚙️ Paramètres")
+keyword = st.sidebar.text_input("🔍 Mot-clé:", placeholder="guerre en Irak")
 
-# CHOIX DE LA PLATEFORME
-platform = st.sidebar.selectbox(
-    "📱 Plateforme:",
-    ["YouTube", "TikTok"],
-    help="Choisir la plateforme de recherche"
+# Option de langue
+language = st.sidebar.selectbox(
+    "🌍 Langue de recherche:",
+    ["Auto (toutes langues)", "Français", "Anglais"],
+    help="Choisir la langue des vidéos à rechercher"
 )
-
-keyword = st.sidebar.text_input("🔍 Mot-clé:", placeholder="guerre en Irak" if platform == "YouTube" else "#viral")
-
-# Option de langue (uniquement pour YouTube)
-if platform == "YouTube":
-    language = st.sidebar.selectbox(
-        "🌍 Langue de recherche:",
-        ["Auto (toutes langues)", "Français", "Anglais"],
-        help="Choisir la langue des vidéos à rechercher"
-    )
-else:
-    language = "Auto (toutes langues)"
 
 st.sidebar.write("### 👁️ Vues minimum")
 col1, col2, col3, col4 = st.sidebar.columns(4)
@@ -64,129 +53,80 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
         progress_bar = st.progress(0)
         status = st.empty()
         
-        status.text(f"🔍 Recherche vidéos {platform}...")
+        status.text("🔍 Recherche vidéos...")
         
         try:
+            # RECHERCHE - Augmentation à 100 résultats pour avoir plus de choix
+            ydl_opts = {
+                'quiet': True, 
+                'no_warnings': True, 
+                'extract_flat': 'in_playlist',
+                'socket_timeout': 15
+            }
+            
+            # Configuration de la langue pour YouTube
+            if language == "Français":
+                ydl_opts['extractor_args'] = {'youtube': {'lang': ['fr']}}
+                search_query = f"ytsearch100:{keyword}"
+            elif language == "Anglais":
+                ydl_opts['extractor_args'] = {'youtube': {'lang': ['en']}}
+                search_query = f"ytsearch100:{keyword}"
+            else:  # Auto
+                search_query = f"ytsearch100:{keyword}"
+            
+            with YoutubeDL(ydl_opts) as ydl:
+                results = ydl.extract_info(search_query, download=False)
+                videos = results.get('entries', [])
+            
+            # Filtrage supplémentaire par langue si nécessaire
+            if language != "Auto (toutes langues)":
+                videos_temp = []
+                target_lang = 'fr' if language == "Français" else 'en'
+                
+                for video in videos:
+                    if video:
+                        # Vérifier la langue de la vidéo
+                        video_lang = video.get('language', '').lower()
+                        uploader = video.get('uploader', '').lower()
+                        title = video.get('title', '').lower()
+                        
+                        # Critères de filtrage par langue
+                        if target_lang == 'fr':
+                            # Pour le français, chercher des indices
+                            if video_lang == 'fr' or any(word in title + uploader for word in ['fr', 'français', 'france']):
+                                videos_temp.append(video)
+                        elif target_lang == 'en':
+                            # Pour l'anglais
+                            if video_lang in ['en', 'en-us', 'en-gb'] or video_lang == '' or video_lang is None:
+                                videos_temp.append(video)
+                
+                # Si pas assez de résultats filtrés, garder les résultats originaux
+                if len(videos_temp) >= 10:
+                    videos = videos_temp
+                else:
+                    st.warning(f"⚠️ Peu de vidéos en {language} trouvées, affichage de tous les résultats")
+            
+            progress_bar.progress(20)
+            
+            # FILTRER
             videos_filtered = []
-            
-            # ============ YOUTUBE ============
-            if platform == "YouTube":
-                # RECHERCHE YouTube
-                ydl_opts = {
-                    'quiet': True, 
-                    'no_warnings': True, 
-                    'extract_flat': 'in_playlist',
-                    'socket_timeout': 15
-                }
-                
-                # Configuration de la langue pour YouTube
-                if language == "Français":
-                    ydl_opts['extractor_args'] = {'youtube': {'lang': ['fr']}}
-                    search_query = f"ytsearch100:{keyword}"
-                elif language == "Anglais":
-                    ydl_opts['extractor_args'] = {'youtube': {'lang': ['en']}}
-                    search_query = f"ytsearch100:{keyword}"
-                else:  # Auto
-                    search_query = f"ytsearch100:{keyword}"
-                
-                with YoutubeDL(ydl_opts) as ydl:
-                    results = ydl.extract_info(search_query, download=False)
-                    videos = results.get('entries', [])
-                
-                # Filtrage supplémentaire par langue si nécessaire
-                if language != "Auto (toutes langues)":
-                    videos_temp = []
-                    target_lang = 'fr' if language == "Français" else 'en'
-                    
-                    for video in videos:
-                        if video:
-                            video_lang = video.get('language', '').lower()
-                            uploader = video.get('uploader', '').lower()
-                            title = video.get('title', '').lower()
-                            
-                            if target_lang == 'fr':
-                                if video_lang == 'fr' or any(word in title + uploader for word in ['fr', 'français', 'france']):
-                                    videos_temp.append(video)
-                            elif target_lang == 'en':
-                                if video_lang in ['en', 'en-us', 'en-gb'] or video_lang == '' or video_lang is None:
-                                    videos_temp.append(video)
-                    
-                    if len(videos_temp) >= 10:
-                        videos = videos_temp
-                    else:
-                        st.warning(f"⚠️ Peu de vidéos en {language} trouvées, affichage de tous les résultats")
-                
-                progress_bar.progress(20)
-                
-                # FILTRER par vues
-                for video in videos:
-                    if video:
-                        views = video.get('view_count', 0) or 0
-                        for min_v, max_v, _ in selected_views:
-                            if min_v <= views <= max_v:
-                                videos_filtered.append(video)
-                                break
-            
-            # ============ TIKTOK ============
-            elif platform == "TikTok":
-                # Pour TikTok, on utilise la recherche par hashtag ou trending
-                ydl_opts = {
-                    'quiet': True,
-                    'no_warnings': True,
-                    'socket_timeout': 20,
-                }
-                
-                # Construire l'URL de recherche TikTok
-                keyword_clean = keyword.replace('#', '').strip()
-                
-                # Essayer plusieurs méthodes de recherche TikTok
-                tiktok_urls = [
-                    f"https://www.tiktok.com/tag/{keyword_clean}",
-                    f"https://www.tiktok.com/search?q={keyword_clean}",
-                ]
-                
-                videos = []
-                
-                for url in tiktok_urls:
-                    try:
-                        with YoutubeDL(ydl_opts) as ydl:
-                            result = ydl.extract_info(url, download=False)
-                            
-                            if result:
-                                # TikTok peut retourner une playlist ou une seule vidéo
-                                if 'entries' in result:
-                                    videos.extend(result['entries'][:50])
-                                else:
-                                    videos.append(result)
-                                
-                                if len(videos) >= 20:
-                                    break
-                    except:
-                        continue
-                
-                if not videos:
-                    st.error("❌ Aucune vidéo TikTok trouvée. Essaye un autre mot-clé ou hashtag.")
-                    st.stop()
-                
-                progress_bar.progress(20)
-                
-                # FILTRER par vues
-                for video in videos:
-                    if video:
-                        views = video.get('view_count', 0) or 0
-                        for min_v, max_v, _ in selected_views:
-                            if min_v <= views <= max_v:
-                                videos_filtered.append(video)
-                                break
+            for video in videos:
+                if video:  # Vérifier que la vidéo existe
+                    views = video.get('view_count', 0) or 0
+                    for min_v, max_v, _ in selected_views:
+                        if min_v <= views <= max_v:
+                            videos_filtered.append(video)
+                            break
             
             # S'assurer d'avoir au moins 5 vidéos
             if len(videos_filtered) < 5 and len(videos) > 0:
                 st.warning(f"⚠️ Seulement {len(videos_filtered)} vidéo(s) trouvée(s) avec les filtres de vues. Ajout de vidéos supplémentaires...")
+                # Ajouter des vidéos même si elles ne correspondent pas exactement aux critères
                 for video in videos:
                     if video and video not in videos_filtered and len(videos_filtered) < 10:
                         videos_filtered.append(video)
             
-            st.success(f"✅ {len(videos_filtered)} vidéo(s) {platform} trouvée(s)!")
+            st.success(f"✅ {len(videos_filtered)} vidéo(s) trouvée(s)!")
             st.divider()
             
             # RÉCUPÉRER TOUS LES COMMENTAIRES
@@ -200,32 +140,19 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
                 progress_bar.progress(40 + int((idx / len(videos_filtered)) * 40))
                 status.text(f"💬 Vidéo {idx+1}/{len(videos_filtered)}...")
                 
-                video_id = video.get('id', '')
-                video_title = video.get('title', 'Sans titre')
+                video_id = video['id']
+                video_title = video['title']
                 
                 try:
-                    # Configuration selon la plateforme
-                    if platform == "YouTube":
-                        video_url = f"https://www.youtube.com/watch?v={video_id}"
-                    else:  # TikTok
-                        video_url = video.get('webpage_url') or video.get('url', '')
-                    
-                    if not video_url:
-                        failed_videos.append(video_title)
-                        continue
-                    
                     ydl_comments = YoutubeDL({
                         'quiet': True,
                         'no_warnings': True,
                         'socket_timeout': 20,
                         'getcomments': True,
-                        'extractor_args': {
-                            'youtube': {'max_comments': ['100']},
-                            'tiktok': {'max_comments': 100}
-                        }
+                        'extractor_args': {'youtube': {'max_comments': ['100']}}
                     })
                     
-                    info = ydl_comments.extract_info(video_url, download=False)
+                    info = ydl_comments.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
                     comments = info.get('comments', [])
                     
                     if comments:
@@ -262,7 +189,7 @@ if st.sidebar.button("🚀 Lancer", use_container_width=True):
             with left_col:
                 st.header("📋 Copie en bas")
                 
-                prompt = f"""*"Agis comme un Consultant en Stratégie {platform} Senior. Je te donne des données brutes (commentaires). Ignore les compliments simples. Cherche les problèmes.
+                prompt = """*"Agis comme un Consultant en Stratégie YouTube Senior. Je te donne des données brutes (commentaires). Ignore les compliments simples. Cherche les problèmes.
 
 Livrable attendu :
 1. Le Top des Sujets : De quoi parle la majorité ?
@@ -274,8 +201,7 @@ Livrable attendu :
                 copy_text = prompt + "\n\n" + "="*50 + "\n"
                 
                 if all_comments_list:
-                    copy_text += f"\nPlateforme: {platform}\n"
-                    copy_text += f"Mot-clé recherché: {keyword}\n"
+                    copy_text += f"\nMot-clé recherché: {keyword}\n"
                     copy_text += f"Nombre de vidéos analysées: {len(videos_filtered)}\n"
                     copy_text += f"Nombre total de commentaires: {len(all_comments_list)}\n\n"
                     copy_text += "="*50 + "\n\n"
@@ -290,27 +216,21 @@ Livrable attendu :
             
             # === DROITE: VIDÉOS ===
             with right_col:
-                st.header(f"📹 Vidéos {platform} ({len(videos_filtered)} trouvées)")
+                st.header(f"📹 Vidéos ({len(videos_filtered)} trouvées)")
                 
                 for idx, video in enumerate(videos_filtered, 1):
-                    title = video.get('title', 'Sans titre')
+                    title = video['title']
                     views = video.get('view_count', 0) or 0
-                    channel = video.get('uploader', '') or video.get('channel', 'Inconnu')
-                    video_id = video.get('id', '')
-                    
-                    # URL selon la plateforme
-                    if platform == "YouTube":
-                        video_url = f"https://www.youtube.com/watch?v={video_id}"
-                    else:
-                        video_url = video.get('webpage_url') or video.get('url', '#')
+                    channel = video.get('uploader', 'Inconnu')
+                    video_id = video['id']
                     
                     # Compter les commentaires pour cette vidéo
                     video_comments = [c for c in all_comments_list if c['video_id'] == video_id]
                     
                     with st.expander(f"Vidéo {idx}: {title} | 👁️ {views:,} | 💬 {len(video_comments)} commentaires"):
-                        st.write(f"**Auteur:** {channel}")
+                        st.write(f"**Canal:** {channel}")
                         st.write(f"👁️ **Vues:** {views:,}")
-                        st.write(f"🔗 [Regarder]({video_url})")
+                        st.write(f"🔗 [Regarder](https://www.youtube.com/watch?v={video_id})")
                         st.divider()
                         st.write("### 💬 Top 20 Commentaires (par likes)")
                         
