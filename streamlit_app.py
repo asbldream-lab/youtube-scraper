@@ -33,7 +33,7 @@ LANGUAGE_RULES = {
     "Spanish": {"code": "es", "helpers": ["el", "la", "y", "en", "es", "por", "con"]},
 }
 
-# --- PROMPT TEMPLATES (Dictionary keys match the English Interface now) ---
+# --- PROMPT TEMPLATES ---
 PROMPT_TEMPLATES = {
     "French": {
         "text": """Tu es un expert en stratégie de contenu YouTube et Data Analyst. Voici une liste de commentaires extraits de vidéos populaires sur le sujet : {subjects}
@@ -141,6 +141,12 @@ st.sidebar.header("1. Search")
 keywords_input = st.sidebar.text_area("Keywords (one per line)", height=100, placeholder="starlink\nias")
 keywords_list = [k.strip() for k in keywords_input.split('\n') if k.strip()]
 
+# --- DIRECT LINKS SECTION ---
+st.sidebar.subheader("OR / AND")
+urls_input = st.sidebar.text_area("Direct Video Links (one per line)", height=100, placeholder="https://www.youtube.com/watch?v=...\nhttps://youtu.be/...")
+urls_list = [u.strip() for u in urls_input.split('\n') if u.strip()]
+# ----------------------------
+
 language = st.sidebar.selectbox("Target Language", list(LANGUAGE_RULES.keys()))
 
 st.sidebar.header("2. Filters")
@@ -153,8 +159,8 @@ date_choice = st.sidebar.selectbox("Time Period", date_options_display)
 
 # ============ CORE LOGIC ============
 if st.sidebar.button("🚀 START ANALYSIS", type="primary", use_container_width=True):
-    if not keywords_list:
-        st.error("❌ You need at least one keyword!")
+    if not keywords_list and not urls_list:
+        st.error("❌ You need at least one keyword OR one video link!")
     else:
         status_text = st.empty()
         progress_bar = st.progress(0)
@@ -162,7 +168,6 @@ if st.sidebar.button("🚀 START ANALYSIS", type="primary", use_container_width=
         
         date_limit = None
         if date_choice != "All time":
-            # Mapping English options to days
             days_map = {
                 "Last 7 days": 7, 
                 "Last 30 days": 30, 
@@ -171,12 +176,17 @@ if st.sidebar.button("🚀 START ANALYSIS", type="primary", use_container_width=
             }
             date_limit = datetime.now() - timedelta(days=days_map[date_choice])
 
-        total_keywords = len(keywords_list)
+        # Global Progress Calculation
+        total_steps = len(keywords_list) + (1 if urls_list else 0)
+        current_step = 0
 
-        for idx, kw in enumerate(keywords_list):
-            status_text.markdown(f"### 🔍 Searching for: **{kw}**...")
+        # --- COMBINED LIST FOR PROCESSING ---
+        combined_entries_to_process = []
+
+        # 1. KEYWORDS PROCESSING
+        for kw in keywords_list:
+            status_text.markdown(f"### 🔍 Searching for keyword: **{kw}**...")
             
-            # --- 1. SEARCH ---
             helpers = LANGUAGE_RULES[language]["helpers"]
             if helpers:
                 query_helpers = " | ".join([f'"{h}"' for h in helpers[:3]]) 
@@ -186,26 +196,44 @@ if st.sidebar.button("🚀 START ANALYSIS", type="primary", use_container_width=
 
             ydl_opts_search = {'quiet': True, 'extract_flat': True, 'ignoreerrors': True}
 
-            entries = []
             with YoutubeDL(ydl_opts_search) as ydl:
                 try:
                     res = ydl.extract_info(f"ytsearch40:{search_query}", download=False)
-                    if res is None: 
-                        progress_bar.progress((idx + 1) / total_keywords)
-                        continue
-                    
-                    entries = res.get('entries', [])
-                    if not entries: 
-                        st.warning(f"⚠️ No videos found for '{kw}'.")
-                        progress_bar.progress((idx + 1) / total_keywords)
-                        continue
+                    if res:
+                        entries = res.get('entries', [])
+                        for entry in entries:
+                            if entry:
+                                entry['keyword_source'] = kw 
+                                combined_entries_to_process.append(entry)
                 except Exception: 
-                    progress_bar.progress((idx + 1) / total_keywords)
-                    continue
+                    pass
+            
+            current_step += 1
+            progress_bar.progress(current_step / (total_steps + 1))
 
-            # --- 2. DETAILED ANALYSIS ---
-            total_entries = len(entries)
-            status_text.text(f"⚡ Starting analysis of {total_entries} videos...")
+        # 2. DIRECT LINKS PROCESSING
+        if urls_list:
+            status_text.markdown(f"### 🔍 Processing {len(urls_list)} direct links...")
+            ydl_opts_direct = {'quiet': True, 'extract_flat': True, 'ignoreerrors': True}
+            
+            with YoutubeDL(ydl_opts_direct) as ydl:
+                for url in urls_list:
+                    try:
+                        info = ydl.extract_info(url, download=False)
+                        if info:
+                            info['keyword_source'] = "Direct Link" 
+                            combined_entries_to_process.append(info)
+                    except Exception:
+                        pass
+            
+            current_step += 1
+            progress_bar.progress(current_step / (total_steps + 1))
+
+        # --- 3. DETAILED ANALYSIS (FOR EVERYONE) ---
+        total_entries = len(combined_entries_to_process)
+        
+        if total_entries > 0:
+            status_text.text(f"⚡ Detailed analysis of {total_entries} videos (Keywords + Links)...")
             
             def process_video(entry):
                 if not entry: return None
@@ -219,7 +247,7 @@ if st.sidebar.button("🚀 START ANALYSIS", type="primary", use_container_width=
 
                 url = f"https://www.youtube.com/watch?v={entry['id']}"
                 
-                # --- CONFIGURATION ---
+                # --- CONFIGURATION (40 Comments & Sort) ---
                 opts_full = {
                     'quiet': True,
                     'getcomments': True,
@@ -252,26 +280,28 @@ if st.sidebar.button("🚀 START ANALYSIS", type="primary", use_container_width=
                     return None
 
             with ThreadPoolExecutor(max_workers=20) as executor:
-                futures = [executor.submit(process_video, e) for e in entries]
+                futures = [executor.submit(process_video, e) for e in combined_entries_to_process]
                 
-                for i, f in enumerate(as_completed(futures)):
+                completed_count = 0
+                for f in as_completed(futures):
                     res = f.result()
                     if res:
-                        res['keyword_source'] = kw
+                        # Recover Source (Keyword or Link)
+                        origin_entry = next((e for e in combined_entries_to_process if e.get('id') == res.get('id')), None)
+                        if origin_entry:
+                            res['keyword_source'] = origin_entry.get('keyword_source', 'Unknown')
+                        
                         all_videos_found.append(res)
                     
+                    completed_count += 1
                     # Smooth Bar
-                    kw_progress = (i + 1) / total_entries
-                    global_progress = (idx + kw_progress) / total_keywords
-                    
-                    progress_bar.progress(min(global_progress, 1.0))
-                    status_text.text(f"⚡ Analyzing: {i+1}/{total_entries} videos processed for '{kw}'...")
+                    progress_bar.progress(min(0.9 + (completed_count / total_entries) * 0.1, 1.0))
+                    status_text.text(f"⚡ Analyzing: {completed_count}/{total_entries} videos processed...")
 
-            progress_bar.progress((idx + 1) / total_keywords)
-
+        progress_bar.progress(1.0)
         status_text.empty()
         
-        # --- 3. RESULTS DISPLAY ---
+        # --- 4. RESULTS DISPLAY ---
         if all_videos_found:
             st.success(f"✅ {len(all_videos_found)} qualified videos found!")
             
@@ -280,16 +310,16 @@ if st.sidebar.button("🚀 START ANALYSIS", type="primary", use_container_width=
             with col1:
                 st.subheader("📋 Copy for AI")
                 
-                # ============================================================
-                # 🌍 PROMPT GENERATION
-                # ============================================================
-                subjects = ", ".join(keywords_list)
-                
-                # Get correct template based on English keys
+                # Context Text
+                subjects_text = ", ".join(keywords_list)
+                if urls_list:
+                    subjects_text += f" + {len(urls_list)} Specific Videos"
+
+                # Get Template
                 lang_pack = PROMPT_TEMPLATES.get(language, PROMPT_TEMPLATES["English"])
                 
-                # 1. Main text
-                prompt = lang_pack["text"].format(subjects=subjects)
+                # 1. Main Text
+                prompt = lang_pack["text"].format(subjects=subjects_text)
                 
                 for v in all_videos_found:
                     prompt += f"=== VIDEO: {v['title']} ===\n"
@@ -303,7 +333,7 @@ if st.sidebar.button("🚀 START ANALYSIS", type="primary", use_container_width=
 
                     comms = v.get('comments', [])
                     if comms:
-                        # 2. Translated Header
+                        # 2. Header
                         prompt += f"\n{lang_pack['header']}\n"
                         
                         # --- SMART SORTING (Top 20 Likes) ---
@@ -313,7 +343,7 @@ if st.sidebar.button("🚀 START ANALYSIS", type="primary", use_container_width=
                         for i, c in enumerate(top_comments, 1): 
                             txt = c.get('text', '').replace('\n', ' ').strip()
                             likes = c.get('like_count', 0)
-                            # 3. Translated Label
+                            # 3. Label
                             prompt += f"[{lang_pack['label']} {i}] ({likes} likes) : \"{txt}\"\n"
                             
                     prompt += "\n" + "="*30 + "\n\n"
@@ -331,7 +361,10 @@ if st.sidebar.button("🚀 START ANALYSIS", type="primary", use_container_width=
                     elif ratio > 1: stars = "⭐⭐"
                     else: stars = "⭐"
                     
+                    source_label = v.get('keyword_source', 'Unknown')
+                    
                     with st.expander(f"{stars} | {views:,} views | {v['title']}"):
+                        st.caption(f"Source: {source_label}")
                         c_img, c_txt = st.columns([1, 2])
                         with c_img: st.image(v.get('thumbnail'), use_container_width=True)
                         with c_txt:
