@@ -7,7 +7,7 @@ import re
 import time
 
 # ==========================================
-# 📦 INSTALLATION SILENCIEUSE
+# 📦 SILENT INSTALLATION
 # ==========================================
 try:
     from langdetect import detect, LangDetectException
@@ -25,16 +25,17 @@ st.title("🚀 YouTube Keyword Research Tool PRO")
 if 'search_history' not in st.session_state:
     st.session_state.search_history = []
 
+# KEYS UPDATED TO ENGLISH FOR THE INTERFACE
 LANGUAGE_RULES = {
-    "Auto (toutes langues)": {"code": None, "helpers": []},
-    "Français": {"code": "fr", "helpers": ["le", "la", "et", "est", "pour", "avec"]},
-    "Anglais": {"code": "en", "helpers": ["the", "and", "is", "to", "with", "for"]},
-    "Espagnol": {"code": "es", "helpers": ["el", "la", "y", "en", "es", "por", "con"]},
+    "Auto (all languages)": {"code": None, "helpers": []},
+    "French": {"code": "fr", "helpers": ["le", "la", "et", "est", "pour", "avec"]},
+    "English": {"code": "en", "helpers": ["the", "and", "is", "to", "with", "for"]},
+    "Spanish": {"code": "es", "helpers": ["el", "la", "y", "en", "es", "por", "con"]},
 }
 
-# --- DICTIONNAIRE DES PROMPTS (TRADUCTION AUTOMATIQUE) ---
+# --- PROMPT TEMPLATES (Dictionary keys match the English Interface now) ---
 PROMPT_TEMPLATES = {
-    "Français": {
+    "French": {
         "text": """Tu es un expert en stratégie de contenu YouTube et Data Analyst. Voici une liste de commentaires extraits de vidéos populaires sur le sujet : {subjects}
 
 TA MISSION : Analyse ces commentaires pour identifier les opportunités de marché inexploitées. Ignore les commentaires génériques (type "super vidéo", "first"). Concentre-toi sur le fond.
@@ -60,7 +61,7 @@ Voici les commentaires à analyser :
         "label": "Commentaire"
     },
 
-    "Anglais": {
+    "English": {
         "text": """You are an expert in YouTube content strategy and Data Analyst. Here is a list of comments extracted from popular videos on the topic: {subjects}
 
 YOUR MISSION: Analyze these comments to identify untapped market opportunities. Ignore generic comments (like "great video", "first"). Focus on the substance.
@@ -86,7 +87,7 @@ Here are the comments to analyze:
         "label": "Comment"
     },
 
-    "Espagnol": {
+    "Spanish": {
         "text": """Eres un experto en estrategia de contenido de YouTube y Analista de Datos. Aquí tienes una lista de comentarios extraídos de videos populares sobre el tema: {subjects}
 
 TU MISIÓN: Analiza estos comentarios para identificar oportunidades de mercado sin explotar. Ignora los comentarios genéricos (tipo "buen video", "primero"). Céntrate en el fondo.
@@ -113,15 +114,15 @@ Aquí están los comentarios para analizar:
     }
 }
 
-# Fallback pour "Auto"
-PROMPT_TEMPLATES["Auto (toutes langues)"] = PROMPT_TEMPLATES["Français"]
+# Fallback
+PROMPT_TEMPLATES["Auto (all languages)"] = PROMPT_TEMPLATES["English"]
 
 
 # ==========================================
-# 🧠 MOTEUR INTELLIGENT
+# 🧠 INTELLIGENT ENGINE
 # ==========================================
 def validate_language(text, target_lang_name):
-    if target_lang_name == "Auto (toutes langues)": return True
+    if target_lang_name == "Auto (all languages)": return True
     if not text or len(text) < 5: return False
     target_code = LANGUAGE_RULES[target_lang_name]["code"]
     
@@ -135,38 +136,47 @@ def validate_language(text, target_lang_name):
     count = sum(1 for h in helpers if f" {h} " in text_lower)
     return count >= 2
 
-# ============ SIDEBAR ============
-st.sidebar.header("1. Recherche")
-keywords_input = st.sidebar.text_area("Mots-clés (un par ligne)", height=100, placeholder="starlink\nias")
+# ============ SIDEBAR (ENGLISH) ============
+st.sidebar.header("1. Search")
+keywords_input = st.sidebar.text_area("Keywords (one per line)", height=100, placeholder="starlink\nias")
 keywords_list = [k.strip() for k in keywords_input.split('\n') if k.strip()]
 
-language = st.sidebar.selectbox("Langue cible", list(LANGUAGE_RULES.keys()))
+language = st.sidebar.selectbox("Target Language", list(LANGUAGE_RULES.keys()))
 
-st.sidebar.header("2. Filtres")
-min_views = st.sidebar.number_input("Vues Minimum", value=5000, step=1000)
-min_duration = st.sidebar.selectbox("Durée Minimum", ["Toutes", "2 min", "5 min"])
-date_choice = st.sidebar.selectbox("Période", ["Toutes", "7 derniers jours", "30 derniers jours", "6 derniers mois", "1 an"])
+st.sidebar.header("2. Filters")
+min_views = st.sidebar.number_input("Minimum Views", value=5000, step=1000)
+min_duration = st.sidebar.selectbox("Minimum Duration", ["All", "2 min", "5 min"])
 
-# ============ COEUR DU PROGRAMME ============
-if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_width=True):
+# Translation of date options for logic mapping
+date_options_display = ["All time", "Last 7 days", "Last 30 days", "Last 6 months", "1 year"]
+date_choice = st.sidebar.selectbox("Time Period", date_options_display)
+
+# ============ CORE LOGIC ============
+if st.sidebar.button("🚀 START ANALYSIS", type="primary", use_container_width=True):
     if not keywords_list:
-        st.error("❌ Il faut au moins un mot-clé !")
+        st.error("❌ You need at least one keyword!")
     else:
         status_text = st.empty()
         progress_bar = st.progress(0)
         all_videos_found = []
         
         date_limit = None
-        if date_choice != "Toutes":
-            days_map = {"7 derniers jours": 7, "30 derniers jours": 30, "6 derniers mois": 180, "1 an": 365}
-            date_limit = datetime.now() - timedelta(days=days[date_choice])
+        if date_choice != "All time":
+            # Mapping English options to days
+            days_map = {
+                "Last 7 days": 7, 
+                "Last 30 days": 30, 
+                "Last 6 months": 180, 
+                "1 year": 365
+            }
+            date_limit = datetime.now() - timedelta(days=days_map[date_choice])
 
         total_keywords = len(keywords_list)
 
         for idx, kw in enumerate(keywords_list):
-            status_text.markdown(f"### 🔍 Recherche pour : **{kw}**...")
+            status_text.markdown(f"### 🔍 Searching for: **{kw}**...")
             
-            # --- 1. RECHERCHE (Boolean Search) ---
+            # --- 1. SEARCH ---
             helpers = LANGUAGE_RULES[language]["helpers"]
             if helpers:
                 query_helpers = " | ".join([f'"{h}"' for h in helpers[:3]]) 
@@ -186,21 +196,21 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                     
                     entries = res.get('entries', [])
                     if not entries: 
-                        st.warning(f"⚠️ Aucune vidéo trouvée pour '{kw}'.")
+                        st.warning(f"⚠️ No videos found for '{kw}'.")
                         progress_bar.progress((idx + 1) / total_keywords)
                         continue
                 except Exception: 
                     progress_bar.progress((idx + 1) / total_keywords)
                     continue
 
-            # --- 2. ANALYSE DÉTAILLÉE ---
+            # --- 2. DETAILED ANALYSIS ---
             total_entries = len(entries)
-            status_text.text(f"⚡ Démarrage de l'analyse de {total_entries} vidéos...")
+            status_text.text(f"⚡ Starting analysis of {total_entries} videos...")
             
             def process_video(entry):
                 if not entry: return None
 
-                # Filtres rapides
+                # Quick Filters
                 v_count = entry.get('view_count')
                 if v_count is not None and v_count < min_views: return None
 
@@ -209,11 +219,11 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
 
                 url = f"https://www.youtube.com/watch?v={entry['id']}"
                 
-                # --- CONFIGURATION (On télécharge 40 pour trier ensuite) ---
+                # --- CONFIGURATION ---
                 opts_full = {
                     'quiet': True,
                     'getcomments': True,
-                    'max_comments': 40,        # On en prend 40 pour avoir du choix
+                    'max_comments': 40,
                     'skip_download': True,
                     'ignoreerrors': True,
                     'socket_timeout': 10,
@@ -250,68 +260,68 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                         res['keyword_source'] = kw
                         all_videos_found.append(res)
                     
-                    # Barre fluide
+                    # Smooth Bar
                     kw_progress = (i + 1) / total_entries
                     global_progress = (idx + kw_progress) / total_keywords
                     
                     progress_bar.progress(min(global_progress, 1.0))
-                    status_text.text(f"⚡ Analyse en cours : {i+1}/{total_entries} vidéos traitées pour '{kw}'...")
+                    status_text.text(f"⚡ Analyzing: {i+1}/{total_entries} videos processed for '{kw}'...")
 
             progress_bar.progress((idx + 1) / total_keywords)
 
         status_text.empty()
         
-        # --- 3. AFFICHAGE RÉSULTATS ---
+        # --- 3. RESULTS DISPLAY ---
         if all_videos_found:
-            st.success(f"✅ {len(all_videos_found)} vidéos qualifiées trouvées !")
+            st.success(f"✅ {len(all_videos_found)} qualified videos found!")
             
             col1, col2 = st.columns([1, 2])
             
             with col1:
-                st.subheader("📋 Copier pour l'IA")
+                st.subheader("📋 Copy for AI")
                 
                 # ============================================================
-                # 🌍 GÉNÉRATION DU PROMPT SELON LA LANGUE CHOISIE
+                # 🌍 PROMPT GENERATION
                 # ============================================================
                 subjects = ", ".join(keywords_list)
                 
-                # On récupère le pack de langue complet (Texte + Titres)
-                lang_pack = PROMPT_TEMPLATES.get(language, PROMPT_TEMPLATES["Français"])
+                # Get correct template based on English keys
+                lang_pack = PROMPT_TEMPLATES.get(language, PROMPT_TEMPLATES["English"])
                 
-                # 1. Le texte principal
+                # 1. Main text
                 prompt = lang_pack["text"].format(subjects=subjects)
                 
                 for v in all_videos_found:
-                    prompt += f"=== VIDÉO : {v['title']} ===\n"
-                    prompt += f"Lien: {v['webpage_url']}\n"
-                    prompt += f"Vues: {v.get('view_count', 0):,}\n"
+                    prompt += f"=== VIDEO: {v['title']} ===\n"
+                    prompt += f"Link: {v['webpage_url']}\n"
+                    prompt += f"Views: {v.get('view_count', 0):,}\n"
                     desc = v.get('description', '').replace('\n', ' ')[:200]
                     prompt += f"Desc: {desc}...\n"
                     
                     if v.get('automatic_captions') or v.get('subtitles'):
-                        prompt += "[Transcription disponible sur le lien]\n"
+                        prompt += "[Transcription available on link]\n"
 
                     comms = v.get('comments', [])
                     if comms:
-                        # 2. Le titre de section traduit
+                        # 2. Translated Header
                         prompt += f"\n{lang_pack['header']}\n"
                         
-                        # --- TRI INTELLIGENT (Top 20 Likes) ---
+                        # --- SMART SORTING (Top 20 Likes) ---
                         comms.sort(key=lambda x: x.get('like_count', 0) or 0, reverse=True)
                         top_comments = comms[:20] 
 
                         for i, c in enumerate(top_comments, 1): 
                             txt = c.get('text', '').replace('\n', ' ').strip()
                             likes = c.get('like_count', 0)
-                            # 3. L'étiquette traduite (Commentaire/Comment/Comentario)
+                            # 3. Translated Label
                             prompt += f"[{lang_pack['label']} {i}] ({likes} likes) : \"{txt}\"\n"
                             
                     prompt += "\n" + "="*30 + "\n\n"
                 
-                st.text_area(f"Prompt généré ({language}) :", value=prompt, height=600)
+                st.text_area(f"Generated Prompt ({language}) :", value=prompt, height=600)
             
             with col2:
-                st.subheader("📹 Aperçu des vidéos")
+                st.subheader("📹 Video Preview")
                 for v in all_videos_found:
                     subs = v.get('channel_follower_count') or 1
                     views = v.get('view_count', 0)
@@ -321,13 +331,13 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                     elif ratio > 1: stars = "⭐⭐"
                     else: stars = "⭐"
                     
-                    with st.expander(f"{stars} | {views:,} vues | {v['title']}"):
+                    with st.expander(f"{stars} | {views:,} views | {v['title']}"):
                         c_img, c_txt = st.columns([1, 2])
                         with c_img: st.image(v.get('thumbnail'), use_container_width=True)
                         with c_txt:
-                            st.write(f"**Chaîne:** {v.get('uploader')}")
-                            st.write(f"**Abonnés:** {subs:,}")
+                            st.write(f"**Channel:** {v.get('uploader')}")
+                            st.write(f"**Subscribers:** {subs:,}")
                             st.write(f"**Ratio:** {ratio:.2f}x")
-                            st.write(f"[Voir sur YouTube]({v['webpage_url']})")
+                            st.write(f"[Watch on YouTube]({v['webpage_url']})")
         else:
-            st.warning("Aucune vidéo ne correspond à tes critères stricts.")
+            st.warning("No videos found matching your strict criteria.")
