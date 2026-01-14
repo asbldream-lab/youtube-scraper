@@ -76,9 +76,12 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
             days_map = {"7 derniers jours": 7, "30 derniers jours": 30, "6 derniers mois": 180, "1 an": 365}
             date_limit = datetime.now() - timedelta(days=days_map[date_choice])
 
+        total_keywords = len(keywords_list)
+
         for idx, kw in enumerate(keywords_list):
-            status_text.markdown(f"### 🔍 Analyse de : **{kw}**...")
+            status_text.markdown(f"### 🔍 Recherche pour : **{kw}**...")
             
+            # --- 1. RECHERCHE (Boolean Search) ---
             helpers = LANGUAGE_RULES[language]["helpers"]
             if helpers:
                 query_helpers = " | ".join([f'"{h}"' for h in helpers[:3]]) 
@@ -92,16 +95,27 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
             with YoutubeDL(ydl_opts_search) as ydl:
                 try:
                     res = ydl.extract_info(f"ytsearch40:{search_query}", download=False)
-                    if res is None: continue
+                    if res is None: 
+                        progress_bar.progress((idx + 1) / total_keywords)
+                        continue
+                    
                     entries = res.get('entries', [])
-                    if not entries: continue
-                except Exception: continue
+                    if not entries: 
+                        st.warning(f"⚠️ Aucune vidéo trouvée pour '{kw}'.")
+                        progress_bar.progress((idx + 1) / total_keywords)
+                        continue
+                except Exception: 
+                    progress_bar.progress((idx + 1) / total_keywords)
+                    continue
 
-            status_text.text(f"⚡ Filtrage de {len(entries)} vidéos (Mode Turbo)...")
+            # --- 2. ANALYSE DÉTAILLÉE (BARRE PROGRESSIVE ACTIVE) ---
+            total_entries = len(entries)
+            status_text.text(f"⚡ Démarrage de l'analyse de {total_entries} vidéos...")
             
             def process_video(entry):
                 if not entry: return None
 
+                # Filtres rapides
                 v_count = entry.get('view_count')
                 if v_count is not None and v_count < min_views: return None
 
@@ -110,15 +124,15 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
 
                 url = f"https://www.youtube.com/watch?v={entry['id']}"
                 
-                # --- CONFIGURATION DE TÉLÉCHARGEMENT ---
+                # --- CONFIGURATION (Identique à ta demande) ---
                 opts_full = {
                     'quiet': True,
                     'getcomments': True,
-                    'max_comments': 40,        # <--- Télécharge 40 commentaires max
+                    'max_comments': 40,        # 40 commentaires
                     'skip_download': True,
                     'ignoreerrors': True,
-                    'socket_timeout': 10,
-                    'writesubtitles': True,
+                    'socket_timeout': 10,      # Turbo Speed
+                    'writesubtitles': True,    # Transcription
                     'writeautomaticsub': True,
                     'subtitleslangs': ['all'],
                 }
@@ -144,16 +158,27 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
 
             with ThreadPoolExecutor(max_workers=20) as executor:
                 futures = [executor.submit(process_video, e) for e in entries]
-                for f in as_completed(futures):
+                
+                # --- C'EST ICI QUE J'AI AJOUTÉ L'ANIMATION DE LA BARRE ---
+                for i, f in enumerate(as_completed(futures)):
                     res = f.result()
                     if res:
                         res['keyword_source'] = kw
                         all_videos_found.append(res)
-            
-            progress_bar.progress((idx + 1) / len(keywords_list))
+                    
+                    # Calcul : On avance un tout petit peu la barre pour chaque vidéo traitée
+                    kw_progress = (i + 1) / total_entries
+                    global_progress = (idx + kw_progress) / total_keywords
+                    
+                    progress_bar.progress(min(global_progress, 1.0))
+                    status_text.text(f"⚡ Analyse en cours : {i+1}/{total_entries} vidéos traitées pour '{kw}'...")
+
+            # Sécurité fin de mot clé
+            progress_bar.progress((idx + 1) / total_keywords)
 
         status_text.empty()
         
+        # --- 3. AFFICHAGE RÉSULTATS (Identique) ---
         if all_videos_found:
             st.success(f"✅ {len(all_videos_found)} vidéos qualifiées trouvées !")
             
@@ -177,12 +202,10 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                     comms = v.get('comments', [])
                     if comms:
                         prompt += "\n--- AVIS UTILISATEURS (FORMAT STRICT) ---\n"
-                        # --- CORRECTION ICI : On affiche TOUT (pas de [:8]) ---
+                        # Affichage COMPLET (40 max) avec guillemets stricts
                         for i, c in enumerate(comms, 1): 
-                            # Nettoyage : suppression des sauts de ligne internes
                             txt = c.get('text', '').replace('\n', ' ').strip()
                             likes = c.get('like_count', 0)
-                            # Formatage strict : [ID] "texte"
                             prompt += f"[Commentaire {i}] ({likes} likes) : \"{txt}\"\n"
                     prompt += "\n" + "="*30 + "\n\n"
                 
