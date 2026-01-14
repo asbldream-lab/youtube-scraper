@@ -17,7 +17,7 @@ except ImportError:
     from langdetect import detect, LangDetectException
 
 # ==========================================
-# ⚙️ CONFIGURATION
+# ⚙️ CONFIGURATION & TEMPLATES
 # ==========================================
 st.set_page_config(page_title="YouTube Scraper Pro", layout="wide")
 st.title("🚀 YouTube Keyword Research Tool PRO")
@@ -31,6 +31,91 @@ LANGUAGE_RULES = {
     "Anglais": {"code": "en", "helpers": ["the", "and", "is", "to", "with", "for"]},
     "Espagnol": {"code": "es", "helpers": ["el", "la", "y", "en", "es", "por", "con"]},
 }
+
+# --- DICTIONNAIRE DES PROMPTS (TRADUCTION AUTOMATIQUE) ---
+PROMPT_TEMPLATES = {
+    "Français": {
+        "text": """Tu es un expert en stratégie de contenu YouTube et Data Analyst. Voici une liste de commentaires extraits de vidéos populaires sur le sujet : {subjects}
+
+TA MISSION : Analyse ces commentaires pour identifier les opportunités de marché inexploitées. Ignore les commentaires génériques (type "super vidéo", "first"). Concentre-toi sur le fond.
+
+RÉPONDS EXACTEMENT AVEC CETTE STRUCTURE :
+
+📊 PARTIE 1 : ANALYSE DU MARCHÉ
+1. Les Idées Récurrentes : Quels sont les 3-5 sujets de discussion qui reviennent le plus souvent ?
+2. Les Frustrations (Pain Points) : Qu'est-ce qui énerve les gens ? Quels sont leurs problèmes non résolus ?
+3. Les Manques (Gaps) : Qu'est-ce que les gens réclament ? Quelles questions posent-ils sans obtenir de réponse ?
+
+🚀 PARTIE 2 : 3 ANGLES DE VIDÉOS GAGNANTS
+Propose 3 concepts de vidéos qui répondent spécifiquement aux frustrations et aux manques identifiés ci-dessus. Pour chaque angle, utilise ce format :
+
+👉 Angle #X : [Titre accrocheur et Pute-à-clic Éthique]
+- Le Besoin ciblé : (Quel problème identifié en Partie 1 cela résout-il ?)
+- La Promesse : (Qu'est-ce que le spectateur va apprendre ?)
+- Pourquoi ça va marcher : (Justification basée sur les commentaires)
+
+Voici les commentaires à analyser :
+""",
+        "header": "--- TOP 20 COMMENTAIRES (LES PLUS LIKÉS) ---",
+        "label": "Commentaire"
+    },
+
+    "Anglais": {
+        "text": """You are an expert in YouTube content strategy and Data Analyst. Here is a list of comments extracted from popular videos on the topic: {subjects}
+
+YOUR MISSION: Analyze these comments to identify untapped market opportunities. Ignore generic comments (like "great video", "first"). Focus on the substance.
+
+REPLY EXACTLY WITH THIS STRUCTURE:
+
+📊 PART 1: MARKET ANALYSIS
+1. Recurring Themes: What are the 3-5 discussion topics that come up most often?
+2. Frustrations (Pain Points): What annoys people? What are their unresolved problems?
+3. Gaps: What are people asking for? What questions are they asking without getting an answer?
+
+🚀 PART 2: 3 WINNING VIDEO ANGLES
+Propose 3 video concepts that specifically address the frustrations and gaps identified above. For each angle, use this format:
+
+👉 Angle #X: [Catchy & Ethical Clickbait Title]
+- The Targeted Need: (Which problem identified in Part 1 does this solve?)
+- The Promise: (What will the viewer learn?)
+- Why it will work: (Justification based on the comments)
+
+Here are the comments to analyze:
+""",
+        "header": "--- TOP 20 COMMENTS (MOST LIKED) ---",
+        "label": "Comment"
+    },
+
+    "Espagnol": {
+        "text": """Eres un experto en estrategia de contenido de YouTube y Analista de Datos. Aquí tienes una lista de comentarios extraídos de videos populares sobre el tema: {subjects}
+
+TU MISIÓN: Analiza estos comentarios para identificar oportunidades de mercado sin explotar. Ignora los comentarios genéricos (tipo "buen video", "primero"). Céntrate en el fondo.
+
+RESPONDE EXACTAMENTE CON ESTA ESTRUCTURA:
+
+📊 PARTE 1: ANÁLISIS DE MERCADO
+1. Ideas Recurrentes: ¿Cuáles son los 3-5 temas de discusión que más se repiten?
+2. Frustraciones (Pain Points): ¿Qué molesta a la gente? ¿Cuáles son sus problemas no resueltos?
+3. Carencias (Gaps): ¿Qué reclama la gente? ¿Qué preguntas hacen sin obtener respuesta?
+
+🚀 PARTE 2: 3 ÁNGULOS DE VIDEOS GANADORES
+Propón 3 conceptos de videos que respondan específicamente a las frustraciones y carencias identificadas anteriormente. Para cada ángulo, utiliza este formato:
+
+👉 Ángulo #X: [Título llamativo y Clickbait Ético]
+- La Necesidad: (¿Qué problema identificado en la Parte 1 resuelve esto?)
+- La Promesa: (¿Qué aprenderá el espectador?)
+- Por qué funcionará: (Justificación basada en los comentarios)
+
+Aquí están los comentarios para analizar:
+""",
+        "header": "--- TOP 20 COMENTARIOS (MÁS GUSTADOS) ---",
+        "label": "Comentario"
+    }
+}
+
+# Fallback pour "Auto"
+PROMPT_TEMPLATES["Auto (toutes langues)"] = PROMPT_TEMPLATES["Français"]
+
 
 # ==========================================
 # 🧠 MOTEUR INTELLIGENT
@@ -185,29 +270,16 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
             with col1:
                 st.subheader("📋 Copier pour l'IA")
                 
+                # ============================================================
+                # 🌍 GÉNÉRATION DU PROMPT SELON LA LANGUE CHOISIE
+                # ============================================================
                 subjects = ", ".join(keywords_list)
-                prompt = f"""Tu es un expert en stratégie de contenu YouTube et Data Analyst. Voici une liste de commentaires extraits de vidéos populaires sur le sujet : {subjects}
-
-TA MISSION : Analyse ces commentaires pour identifier les opportunités de marché inexploitées. Ignore les commentaires génériques (type "super vidéo", "first"). Concentre-toi sur le fond.
-
-RÉPONDS EXACTEMENT AVEC CETTE STRUCTURE :
-
-📊 PARTIE 1 : ANALYSE DU MARCHÉ
-1. Les Idées Récurrentes : Quels sont les 3-5 sujets de discussion qui reviennent le plus souvent ?
-2. Les Frustrations (Pain Points) : Qu'est-ce qui énerve les gens ? Quels sont leurs problèmes non résolus ?
-3. Les Manques (Gaps) : Qu'est-ce que les gens réclament ? Quelles questions posent-ils sans obtenir de réponse ?
-
-🚀 PARTIE 2 : 3 ANGLES DE VIDÉOS GAGNANTS
-Propose 3 concepts de vidéos qui répondent spécifiquement aux frustrations et aux manques identifiés ci-dessus. Pour chaque angle, utilise ce format :
-
-👉 Angle #X : [Titre accrocheur et Pute-à-clic Éthique]
-- Le Besoin ciblé : (Quel problème identifié en Partie 1 cela résout-il ?)
-- La Promesse : (Qu'est-ce que le spectateur va apprendre ?)
-- Pourquoi ça va marcher : (Justification basée sur les commentaires)
-
-Voici les commentaires à analyser :
-
-"""
+                
+                # On récupère le pack de langue complet (Texte + Titres)
+                lang_pack = PROMPT_TEMPLATES.get(language, PROMPT_TEMPLATES["Français"])
+                
+                # 1. Le texte principal
+                prompt = lang_pack["text"].format(subjects=subjects)
                 
                 for v in all_videos_found:
                     prompt += f"=== VIDÉO : {v['title']} ===\n"
@@ -221,24 +293,22 @@ Voici les commentaires à analyser :
 
                     comms = v.get('comments', [])
                     if comms:
-                        prompt += "\n--- TOP 20 COMMENTAIRES (LES PLUS LIKÉS) ---\n"
+                        # 2. Le titre de section traduit
+                        prompt += f"\n{lang_pack['header']}\n"
                         
-                        # ========================================================
-                        # 🔹 LE TRI INTELLIGENT EST ICI 🔹
-                        # 1. On trie par nombre de likes (du plus grand au plus petit)
-                        # 2. On garde seulement les 20 premiers
-                        # ========================================================
+                        # --- TRI INTELLIGENT (Top 20 Likes) ---
                         comms.sort(key=lambda x: x.get('like_count', 0) or 0, reverse=True)
                         top_comments = comms[:20] 
 
                         for i, c in enumerate(top_comments, 1): 
                             txt = c.get('text', '').replace('\n', ' ').strip()
                             likes = c.get('like_count', 0)
-                            prompt += f"[Commentaire {i}] ({likes} likes) : \"{txt}\"\n"
+                            # 3. L'étiquette traduite (Commentaire/Comment/Comentario)
+                            prompt += f"[{lang_pack['label']} {i}] ({likes} likes) : \"{txt}\"\n"
                             
                     prompt += "\n" + "="*30 + "\n\n"
                 
-                st.text_area("Prompt généré (Filtré Top 20 Likes) :", value=prompt, height=600)
+                st.text_area(f"Prompt généré ({language}) :", value=prompt, height=600)
             
             with col2:
                 st.subheader("📹 Aperçu des vidéos")
