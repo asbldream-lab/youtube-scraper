@@ -88,7 +88,6 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
         st.error("❌ Il faut au moins un mot-clé !")
     else:
         # Initialisation
-        results_container = st.container()
         status_text = st.empty()
         progress_bar = st.progress(0)
         
@@ -105,30 +104,26 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
             status_text.markdown(f"### 🔍 Analyse de : **{kw}**...")
             
             # 1. CONSTRUCTION DE LA REQUÊTE INTELLIGENTE
-            # On ajoute (el|la|y) pour forcer YouTube à chercher en espagnol/français/anglais
             helpers = LANGUAGE_RULES[language]["helpers"]
             if helpers:
-                # Ex: "Starlink (el | la | y)"
                 query_helpers = " | ".join([f'"{h}"' for h in helpers[:3]]) 
                 search_query = f'{kw} ({query_helpers})'
             else:
                 search_query = kw
 
-            # 2. RECHERCHE RAPIDE (JUSTE LES LISTES)
+            # 2. RECHERCHE RAPIDE
             ydl_opts_search = {
                 'quiet': True,
-                'extract_flat': True, # Super rapide (ne télécharge pas les détails)
+                'extract_flat': True,
                 'ignoreerrors': True,
             }
 
             entries = []
             with YoutubeDL(ydl_opts_search) as ydl:
                 try:
-                    # On demande 40 résultats
                     res = ydl.extract_info(f"ytsearch40:{search_query}", download=False)
                     
-                    # --- FIX ANTI-CRASH ---
-                    if res is None: # Si YouTube bloque ou renvoie rien
+                    if res is None: 
                         st.warning(f"⚠️ YouTube n'a pas répondu pour '{kw}'.")
                         continue
                         
@@ -142,23 +137,19 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                     continue
 
             # 3. ANALYSE DÉTAILLÉE (PARALLÈLE)
-            status_text.text(f"⚡ Filtrage de {len(entries)} vidéos...")
+            status_text.text(f"⚡ Filtrage de {len(entries)} vidéos (Mode Turbo)...")
             
             def process_video(entry):
-                """Fonction exécutée par les robots en parallèle"""
                 if not entry: return None
 
-                # Filtre 1 : Vues (Rapide)
-                # Note: extract_flat donne parfois view_count=None, on vérifie
+                # Filtre 1 : Vues
                 v_count = entry.get('view_count')
                 if v_count is not None and v_count < min_views:
                     return None
 
-                # Filtre 2 : Langue sur le TITRE (Rapide)
+                # Filtre 2 : Langue sur le TITRE
                 title = entry.get('title', '')
                 if not validate_language(title, language):
-                    # Si le titre ne suffit pas, on laisse passer pour vérifier la description plus tard
-                    # Sauf si c'est flagrant que c'est la mauvaise langue
                     pass 
 
                 # TÉLÉCHARGEMENT DES DÉTAILS
@@ -166,27 +157,28 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                 opts_full = {
                     'quiet': True,
                     'getcomments': True,
-                    'max_comments': 10, # <--- VITESSSE : ON LIMITE A 10
+                    'max_comments': 10,
                     'skip_download': True,
-                    'ignoreerrors': True
+                    'ignoreerrors': True,
+                    'socket_timeout': 10 # <--- VITESSE : Si ça traine > 10s, on coupe
                 }
                 
                 try:
                     with YoutubeDL(opts_full) as ydl_full:
                         info = ydl_full.extract_info(url, download=False)
                         
-                        # Filtre 3 : Date (Précis)
+                        # Filtre 3 : Date
                         if date_limit:
                             ud = info.get('upload_date')
                             if ud and datetime.strptime(ud, '%Y%m%d') < date_limit:
                                 return None
 
-                        # Filtre 4 : Durée (Précis)
+                        # Filtre 4 : Durée
                         dur = info.get('duration', 0)
                         if min_duration == "2 min" and dur < 120: return None
                         if min_duration == "5 min" and dur < 300: return None
 
-                        # Filtre 5 : LANGUE FINAL (Titre + Description)
+                        # Filtre 5 : LANGUE FINAL
                         full_text = f"{info['title']} {info['description'][:500]}"
                         if not validate_language(full_text, language):
                             return None
@@ -195,8 +187,9 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                 except:
                     return None
 
-            # Lancement des threads (Robots)
-            with ThreadPoolExecutor(max_workers=10) as executor:
+            # Lancement des threads
+            # <--- VITESSE : 20 OUVRIERS AU LIEU DE 10
+            with ThreadPoolExecutor(max_workers=20) as executor:
                 futures = [executor.submit(process_video, e) for e in entries]
                 for f in as_completed(futures):
                     res = f.result()
@@ -224,15 +217,13 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                     prompt += f"=== VIDÉO : {v['title']} ===\n"
                     prompt += f"Lien: {v['webpage_url']}\n"
                     prompt += f"Vues: {v.get('view_count', 0):,}\n"
-                    # Description courte
                     desc = v.get('description', '').replace('\n', ' ')[:200]
                     prompt += f"Desc: {desc}...\n"
                     
-                    # Commentaires
                     comms = v.get('comments', [])
                     if comms:
                         prompt += "Avis spectateurs:\n"
-                        for c in comms[:5]: # Top 5 commentaires
+                        for c in comms[:5]:
                             txt = c.get('text', '').replace('\n', ' ')
                             prompt += f"- {txt}\n"
                     prompt += "\n"
@@ -243,13 +234,28 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
             with col2:
                 st.subheader("📹 Aperçu des vidéos")
                 for v in all_videos_found:
-                    with st.expander(f"{v.get('view_count', 0):,} vues | {v['title']}"):
+                    
+                    # --- CALCUL DES ÉTOILES ---
+                    subs = v.get('channel_follower_count') or 1
+                    views = v.get('view_count', 0)
+                    ratio = views / subs
+                    
+                    if ratio > 2:
+                        stars = "⭐⭐⭐" # Banger
+                    elif ratio > 1:
+                        stars = "⭐⭐"   # Bonne perf
+                    else:
+                        stars = "⭐"     # Normal
+                    
+                    # AFFICHAGE
+                    with st.expander(f"{stars} | {views:,} vues | {v['title']}"):
                         c_img, c_txt = st.columns([1, 2])
                         with c_img:
                             st.image(v.get('thumbnail'), use_container_width=True)
                         with c_txt:
                             st.write(f"**Chaîne:** {v.get('uploader')}")
-                            st.write(f"**Durée:** {v.get('duration', 0)//60} min")
+                            st.write(f"**Abonnés:** {subs:,}")
+                            st.write(f"**Ratio:** {ratio:.2f}x (Vues/Abonnés)")
                             st.write(f"[Voir sur YouTube]({v['webpage_url']})")
         else:
             st.warning("Aucune vidéo ne correspond à tes critères stricts. Essaie d'élargir la date ou de baisser les vues minimum.")
