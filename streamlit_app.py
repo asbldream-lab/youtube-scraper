@@ -157,7 +157,7 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                 opts_full = {
                     'quiet': True,
                     'getcomments': True,
-                    'max_comments': 10,
+                    'max_comments': 40,
                     'skip_download': True,
                     'ignoreerrors': True,
                     'socket_timeout': 10 # <--- VITESSE : Si ça traine > 10s, on coupe
