@@ -110,11 +110,11 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
 
                 url = f"https://www.youtube.com/watch?v={entry['id']}"
                 
-                # --- CONFIGURATION COMMENTAIRES ---
+                # --- CONFIGURATION DE TÉLÉCHARGEMENT ---
                 opts_full = {
                     'quiet': True,
                     'getcomments': True,
-                    'max_comments': 40,        # On prend 40 "Objets Commentaires" complets
+                    'max_comments': 40,        # <--- Télécharge 40 commentaires max
                     'skip_download': True,
                     'ignoreerrors': True,
                     'socket_timeout': 10,
@@ -174,20 +174,19 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                     if v.get('automatic_captions') or v.get('subtitles'):
                         prompt += "[Transcription disponible sur le lien]\n"
 
-              comms = v.get('comments', [])
+                    comms = v.get('comments', [])
                     if comms:
                         prompt += "\n--- AVIS UTILISATEURS (FORMAT STRICT) ---\n"
-                        
-                        # --- MODIFICATION ICI : On affiche TOUT ce qu'on a téléchargé ---
+                        # --- CORRECTION ICI : On affiche TOUT (pas de [:8]) ---
                         for i, c in enumerate(comms, 1): 
-                            # On retire les sauts de ligne internes
+                            # Nettoyage : suppression des sauts de ligne internes
                             txt = c.get('text', '').replace('\n', ' ').strip()
                             likes = c.get('like_count', 0)
-                            # On encadre avec des guillemets
+                            # Formatage strict : [ID] "texte"
                             prompt += f"[Commentaire {i}] ({likes} likes) : \"{txt}\"\n"
                     prompt += "\n" + "="*30 + "\n\n"
                 
-                st.text_area("Prompt généré (Format Strict) :", value=prompt, height=600)
+                st.text_area("Prompt généré :", value=prompt, height=600)
             
             with col2:
                 st.subheader("📹 Aperçu des vidéos")
