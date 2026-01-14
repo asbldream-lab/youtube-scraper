@@ -74,7 +74,7 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
         date_limit = None
         if date_choice != "Toutes":
             days_map = {"7 derniers jours": 7, "30 derniers jours": 30, "6 derniers mois": 180, "1 an": 365}
-            date_limit = datetime.now() - timedelta(days=days_map[date_choice])
+            date_limit = datetime.now() - timedelta(days=days[date_choice])
 
         total_keywords = len(keywords_list)
 
@@ -108,7 +108,7 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                     progress_bar.progress((idx + 1) / total_keywords)
                     continue
 
-            # --- 2. ANALYSE DÉTAILLÉE (BARRE PROGRESSIVE ACTIVE) ---
+            # --- 2. ANALYSE DÉTAILLÉE ---
             total_entries = len(entries)
             status_text.text(f"⚡ Démarrage de l'analyse de {total_entries} vidéos...")
             
@@ -124,15 +124,15 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
 
                 url = f"https://www.youtube.com/watch?v={entry['id']}"
                 
-                # --- CONFIGURATION (40 coms, Turbo, Transcription) ---
+                # --- CONFIGURATION (On télécharge 40 pour trier ensuite) ---
                 opts_full = {
                     'quiet': True,
                     'getcomments': True,
-                    'max_comments': 40,        # 40 commentaires
+                    'max_comments': 40,        # On en prend 40 pour avoir du choix
                     'skip_download': True,
                     'ignoreerrors': True,
-                    'socket_timeout': 10,      # Turbo Speed
-                    'writesubtitles': True,    # Transcription
+                    'socket_timeout': 10,
+                    'writesubtitles': True,
                     'writeautomaticsub': True,
                     'subtitleslangs': ['all'],
                 }
@@ -159,7 +159,6 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
             with ThreadPoolExecutor(max_workers=20) as executor:
                 futures = [executor.submit(process_video, e) for e in entries]
                 
-                # --- ANIMATION DE LA BARRE ---
                 for i, f in enumerate(as_completed(futures)):
                     res = f.result()
                     if res:
@@ -173,7 +172,6 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                     progress_bar.progress(min(global_progress, 1.0))
                     status_text.text(f"⚡ Analyse en cours : {i+1}/{total_entries} vidéos traitées pour '{kw}'...")
 
-            # Sécurité fin de mot clé
             progress_bar.progress((idx + 1) / total_keywords)
 
         status_text.empty()
@@ -187,7 +185,6 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
             with col1:
                 st.subheader("📋 Copier pour l'IA")
                 
-                # --- NOUVEAU PROMPT EXPERT INTÉGRÉ ICI ---
                 subjects = ", ".join(keywords_list)
                 prompt = f"""Tu es un expert en stratégie de contenu YouTube et Data Analyst. Voici une liste de commentaires extraits de vidéos populaires sur le sujet : {subjects}
 
@@ -208,7 +205,7 @@ Propose 3 concepts de vidéos qui répondent spécifiquement aux frustrations et
 - La Promesse : (Qu'est-ce que le spectateur va apprendre ?)
 - Pourquoi ça va marcher : (Justification basée sur les commentaires)
 
-Voici les commentaires à analyser (analyse les commmentaires pour déterminer la langue dans laquelle tu vas répondre ) :
+Voici les commentaires à analyser :
 
 """
                 
@@ -224,15 +221,24 @@ Voici les commentaires à analyser (analyse les commmentaires pour déterminer l
 
                     comms = v.get('comments', [])
                     if comms:
-                        prompt += "\n--- AVIS UTILISATEURS (FORMAT STRICT) ---\n"
-                        # Affichage COMPLET (40 max) avec guillemets stricts
-                        for i, c in enumerate(comms, 1): 
+                        prompt += "\n--- TOP 20 COMMENTAIRES (LES PLUS LIKÉS) ---\n"
+                        
+                        # ========================================================
+                        # 🔹 LE TRI INTELLIGENT EST ICI 🔹
+                        # 1. On trie par nombre de likes (du plus grand au plus petit)
+                        # 2. On garde seulement les 20 premiers
+                        # ========================================================
+                        comms.sort(key=lambda x: x.get('like_count', 0) or 0, reverse=True)
+                        top_comments = comms[:20] 
+
+                        for i, c in enumerate(top_comments, 1): 
                             txt = c.get('text', '').replace('\n', ' ').strip()
                             likes = c.get('like_count', 0)
                             prompt += f"[Commentaire {i}] ({likes} likes) : \"{txt}\"\n"
+                            
                     prompt += "\n" + "="*30 + "\n\n"
                 
-                st.text_area("Prompt généré :", value=prompt, height=600)
+                st.text_area("Prompt généré (Filtré Top 20 Likes) :", value=prompt, height=600)
             
             with col2:
                 st.subheader("📹 Aperçu des vidéos")
