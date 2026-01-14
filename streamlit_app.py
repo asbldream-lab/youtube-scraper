@@ -39,76 +39,128 @@ LANGUAGE_CONFIG = {
 }
 
 # ==========================================
-# ✅ NOUVEAU MOTEUR DE DÉTECTION DE LANGUE (ROBUSTE)
+# ✅ SYSTÈME DE DÉTECTION INTELLIGENT (3 NIVEAUX)
 # ==========================================
-def detect_video_language(info):
+def detect_language_with_confidence(info, use_comments=False):
     """
-    Détecte la langue d'une vidéo en analysant plusieurs sources.
-    Retourne le code langue (ex: 'fr', 'es', 'en') ou None si indétectable.
+    Retourne (langue_détectée, niveau_confiance)
+    Niveaux : "high" (>0.85), "medium" (0.60-0.85), "low" (<0.60), "unknown"
     """
-    texts_to_analyze = []
     
-    # 1. Titre (priorité haute)
-    title = info.get('title') or ""
-    if title:
-        texts_to_analyze.append(title)
-    
-    # 2. Description (les 1000 premiers caractères)
-    description = info.get('description') or ""
-    if description:
-        # Nettoyer les URLs et hashtags
-        clean_desc = re.sub(r'http\S+|#\S+|@\S+', '', description[:1000])
-        if len(clean_desc) > 50:
-            texts_to_analyze.append(clean_desc)
-    
-    # 3. Commentaires (très fiables pour la langue)
-    comments = info.get('comments') or []
-    comment_texts = []
-    for c in comments[:20]:  # Analyser jusqu'à 20 commentaires
-        text = c.get('text', '')
-        if text and len(text) > 20:
-            comment_texts.append(text)
-    if comment_texts:
-        texts_to_analyze.append(" ".join(comment_texts[:10]))
-    
-    # 4. Métadonnées YouTube (si disponibles)
+    # ========================================
+    # NIVEAU 1 : MÉTADONNÉES YOUTUBE (CONFIANCE ABSOLUE)
+    # ========================================
     yt_lang = info.get('language')
     if yt_lang:
-        return yt_lang[:2].lower()  # Retourne 'fr', 'es', etc.
+        lang_code = yt_lang[:2].lower()
+        return lang_code, "high", "youtube_metadata"
     
-    # 5. Sous-titres automatiques (indicateur fort)
+    # ========================================
+    # NIVEAU 2 : SOUS-TITRES (CONFIANCE HAUTE)
+    # ========================================
+    # Sous-titres automatiques générés par YouTube
     auto_captions = info.get('automatic_captions') or {}
-    subtitles = info.get('subtitles') or {}
-    
-    # Si des sous-titres existent, la première langue est souvent la langue originale
     if auto_captions:
-        first_lang = list(auto_captions.keys())[0] if auto_captions else None
+        first_lang = list(auto_captions.keys())[0]
         if first_lang:
-            return first_lang[:2].lower()
+            lang_code = first_lang[:2].lower()
+            return lang_code, "high", "auto_captions"
     
-    # 6. Détection via langdetect sur les textes collectés
-    if texts_to_analyze:
-        combined_text = " ".join(texts_to_analyze)
-        # Nettoyer le texte
-        combined_text = re.sub(r'[^\w\s\u00C0-\u017F]', ' ', combined_text)
-        combined_text = re.sub(r'\s+', ' ', combined_text).strip()
+    # Sous-titres manuels ajoutés par le créateur
+    subtitles = info.get('subtitles') or {}
+    if subtitles:
+        first_lang = list(subtitles.keys())[0]
+        if first_lang:
+            lang_code = first_lang[:2].lower()
+            return lang_code, "high", "manual_subtitles"
+    
+    # ========================================
+    # NIVEAU 3 : ANALYSE TEXTUELLE (CONFIANCE VARIABLE)
+    # ========================================
+    texts_to_analyze = []
+    
+    # Titre (poids : important)
+    title = info.get('title') or ""
+    if title and len(title) > 20:
+        texts_to_analyze.append(("title", title, 3))  # poids 3
+    
+    # Description (poids : moyen)
+    description = info.get('description') or ""
+    if description:
+        clean_desc = re.sub(r'http\S+|#\S+|@\S+', '', description[:1500])
+        if len(clean_desc) > 80:
+            texts_to_analyze.append(("description", clean_desc, 2))  # poids 2
+    
+    # Commentaires (poids : très important pour la langue réelle)
+    if use_comments:
+        comments = info.get('comments') or []
+        if comments:
+            # ⚡ Analyser PLUS de commentaires (40 au lieu de 20)
+            comment_texts = [c.get('text', '') for c in comments[:40] if len(c.get('text', '')) > 25]
+            if comment_texts:
+                combined_comments = " ".join(comment_texts[:20])
+                texts_to_analyze.append(("comments", combined_comments, 5))  # poids 5 (le plus important)
+    
+    # Détection sur chaque source
+    detections = []
+    for source_name, text, weight in texts_to_analyze:
+        # Nettoyer
+        clean_text = re.sub(r'[^\w\s\u00C0-\u017F\u0400-\u04FF]', ' ', text)
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
         
-        if len(combined_text) > 30:  # Minimum pour une détection fiable
+        if len(clean_text) > 30:
             try:
-                detected = detect_langs(combined_text)
-                if detected:
-                    # Prendre la langue avec la plus haute probabilité
-                    best = detected[0]
-                    if best.prob > 0.5:  # Seuil de confiance
-                        return best.lang
+                detected_langs = detect_langs(clean_text)
+                if detected_langs:
+                    best = detected_langs[0]
+                    # Pondérer la confiance par le poids de la source
+                    weighted_prob = best.prob * (weight / 5.0)  # Normaliser sur 5
+                    detections.append({
+                        'lang': best.lang,
+                        'prob': best.prob,
+                        'weighted_prob': weighted_prob,
+                        'source': source_name,
+                        'weight': weight
+                    })
             except LangDetectException:
                 pass
     
-    return None
+    if detections:
+        # Calculer un score global pour chaque langue détectée
+        lang_scores = {}
+        for d in detections:
+            lang = d['lang']
+            if lang not in lang_scores:
+                lang_scores[lang] = {'total_weighted': 0, 'max_prob': 0, 'sources': []}
+            lang_scores[lang]['total_weighted'] += d['weighted_prob']
+            lang_scores[lang]['max_prob'] = max(lang_scores[lang]['max_prob'], d['prob'])
+            lang_scores[lang]['sources'].append(d['source'])
+        
+        # Trouver la langue avec le meilleur score
+        best_lang = max(lang_scores.items(), key=lambda x: x[1]['total_weighted'])
+        lang_code = best_lang[0]
+        max_prob = best_lang[1]['max_prob']
+        sources = best_lang[1]['sources']
+        
+        # Déterminer le niveau de confiance
+        if max_prob >= 0.85 and len(sources) >= 2:
+            confidence = "high"
+        elif max_prob >= 0.65 or len(sources) >= 2:
+            confidence = "medium"
+        else:
+            confidence = "low"
+        
+        source_info = f"detected_from_{'+'.join(set(sources))}"
+        return lang_code, confidence, source_info
+    
+    return None, "unknown", "no_data"
 
-def is_valid_language(info, target_lang):
+def is_valid_language(info, target_lang, phase="phase1"):
     """
     Vérifie si une vidéo correspond à la langue cible.
+    
+    Phase 1 (sans commentaires) : PERMISSIF - rejette seulement si TRÈS SÛR que c'est faux
+    Phase 2 (avec commentaires) : MODÉRÉ - rejette si confiance moyenne+ que c'est faux
     """
     if target_lang == "Auto (toutes langues)":
         return True
@@ -118,31 +170,78 @@ def is_valid_language(info, target_lang):
         return True
     
     target_code = config['code']
-    detected_lang = detect_video_language(info)
     
-    # Debug info (optionnel, peut être affiché dans l'interface)
+    # Détecter avec le bon niveau d'analyse
+    use_comments = (phase == "phase2")
+    detected_lang, confidence, source = detect_language_with_confidence(info, use_comments)
+    
+    # Stocker pour debug
     info['_detected_language'] = detected_lang
+    info['_detection_confidence'] = confidence
+    info['_detection_source'] = source
     
-    if detected_lang:
-        # Match exact ou variantes (ex: 'es' match 'es', 'es-419', 'es-mx')
-        return detected_lang.startswith(target_code)
+    # ========================================
+    # STRATÉGIE DE FILTRAGE PAR PHASE
+    # ========================================
     
-    # Si on ne peut pas détecter, on rejette par sécurité
-    # (évite les faux positifs en anglais)
-    return False
+    if phase == "phase1":
+        # 🟢 PHASE 1 : TRÈS PERMISSIF
+        # On rejette SEULEMENT si on est TRÈS SÛR que c'est la mauvaise langue
+        if detected_lang is None:
+            return True  # Pas de détection = on garde (sera vérifié en Phase 2)
+        
+        if detected_lang.startswith(target_code):
+            return True  # Match parfait
+        
+        # Rejeter seulement si confiance HAUTE et langue différente
+        if confidence == "high":
+            # Exception : certaines langues proches (es/pt, fr/it)
+            if target_code == "es" and detected_lang == "pt":
+                return True  # Espagnol/Portugais proches
+            if target_code == "pt" and detected_lang == "es":
+                return True
+            if target_code == "fr" and detected_lang in ["it", "es"]:
+                return True  # Langues latines
+            return False  # Clairement pas la bonne langue
+        
+        return True  # Confiance basse/moyenne = on garde pour Phase 2
+    
+    elif phase == "phase2":
+        # 🟡 PHASE 2 : MODÉRÉ (on a plus d'infos via commentaires)
+        if detected_lang is None:
+            return True  # Si impossible de détecter même avec commentaires, on garde (mieux vaut un faux positif)
+        
+        if detected_lang.startswith(target_code):
+            return True  # Match parfait
+        
+        # Rejeter si confiance moyenne+ et langue clairement différente
+        if confidence in ["high", "medium"]:
+            # Exceptions pour langues proches
+            if target_code == "es" and detected_lang in ["pt", "ca"]:  # catalan proche espagnol
+                return True
+            if target_code == "pt" and detected_lang == "es":
+                return True
+            if target_code == "fr" and detected_lang in ["it", "es", "pt"]:
+                return True
+            if target_code == "en" and detected_lang in ["en-us", "en-gb"]:
+                return True
+            
+            # Langue clairement différente avec bonne confiance = rejeter
+            return False
+        
+        return True  # Confiance basse = on garde (doute = bénéfice au contenu)
+    
+    return True  # Fallback : garder
 
 # ==========================================
-# ✅ FONCTION DE RECHERCHE AMÉLIORÉE
+# ✅ FONCTION DE RECHERCHE
 # ==========================================
 def build_search_query(keyword, target_lang):
     """
     Construit une requête de recherche optimisée pour la langue cible.
     """
     config = LANGUAGE_CONFIG.get(target_lang, {})
-    
-    # Recherche de base
     query = f"ytsearch50:{keyword}"
-    
     return query, config.get('yt_lang'), config.get('yt_region')
 
 def get_ydl_options(target_lang, get_comments=False):
@@ -155,10 +254,10 @@ def get_ydl_options(target_lang, get_comments=False):
         'quiet': True,
         'no_warnings': True,
         'ignoreerrors': True,
-        'socket_timeout': 15,
+        'socket_timeout': 30,
+        'retries': 3,
     }
     
-    # Ajouter les paramètres de langue/région si spécifiés
     if config.get('yt_lang'):
         opts['extractor_args'] = {
             'youtube': {
@@ -172,6 +271,11 @@ def get_ydl_options(target_lang, get_comments=False):
     if get_comments:
         opts['getcomments'] = True
         opts['writesubtitles'] = True
+        opts['writeautomaticsub'] = True
+        opts['skip_download'] = True
+    else:
+        opts['writesubtitles'] = True
+        opts['writeautomaticsub'] = True
         opts['skip_download'] = True
     
     return opts
@@ -191,9 +295,8 @@ language = st.sidebar.selectbox(
     list(LANGUAGE_CONFIG.keys())
 )
 
-# Info sur la détection de langue
 if language != "Auto (toutes langues)":
-    st.sidebar.info(f"🔬 Détection intelligente activée : analyse du titre, description, commentaires et sous-titres pour garantir des résultats en {language}.")
+    st.sidebar.info(f"🔬 Détection intelligente à 3 niveaux : métadonnées YouTube, sous-titres, analyse textuelle des commentaires.")
 
 # VUES
 st.sidebar.write("### 👁️ Vues minimum")
@@ -222,7 +325,6 @@ date_filter = st.sidebar.selectbox(
     ["Toutes", "7 derniers jours", "30 derniers jours", "6 derniers mois", "1 an"]
 )
 
-# Option de debug
 show_debug = st.sidebar.checkbox("🔧 Afficher infos de détection", value=False)
 
 # ============ BOUTON RECHERCHE ============
@@ -240,16 +342,16 @@ if st.sidebar.button("🚀 Lancer l'analyse", use_container_width=True):
             date_limit = datetime.now() - timedelta(days=days[date_filter])
 
         all_videos_filtered = []
-        rejected_count = 0
+        rejected_phase1 = 0
+        rejected_phase2 = 0
         
         try:
             total_keywords = len(keywords_list)
             
             for kw_idx, kw in enumerate(keywords_list):
                 status.text(f"🔍 Recherche YouTube : {kw} ({kw_idx + 1}/{total_keywords})")
-                progress_bar.progress(int((kw_idx / total_keywords) * 30))
+                progress_bar.progress(int((kw_idx / total_keywords) * 20))
                 
-                # Construire la requête avec paramètres de langue
                 search_query, yt_lang, yt_region = build_search_query(kw, language)
                 
                 # Recherche initiale
@@ -269,44 +371,49 @@ if st.sidebar.button("🚀 Lancer l'analyse", use_container_width=True):
                     st.warning(f"⚠️ Aucun résultat pour '{kw}'")
                     continue
                 
-                status.text(f"📥 Extraction détaillée de {len(entries)} vidéos pour '{kw}'...")
-                progress_bar.progress(int((kw_idx / total_keywords) * 30) + 15)
+                # ==========================================
+                # 🚀 PHASE 1 : EXTRACTION RAPIDE SANS COMMENTAIRES
+                # ==========================================
+                status.text(f"⚡ Phase 1 : Extraction rapide de {len(entries)} vidéos pour '{kw}'...")
+                progress_bar.progress(int((kw_idx / total_keywords) * 20) + 10)
 
-                # Extraction complète en parallèle
-                def fetch_full(vid):
+                def fetch_metadata_only(vid):
+                    """Extraction légère : métadonnées + sous-titres seulement"""
                     if not vid or not vid.get('id'):
                         return None
                     try:
-                        opts = get_ydl_options(language, get_comments=True)
-                        with YoutubeDL(opts) as ydl_full:
-                            return ydl_full.extract_info(
+                        opts = get_ydl_options(language, get_comments=False)
+                        with YoutubeDL(opts) as ydl_light:
+                            return ydl_light.extract_info(
                                 f"https://www.youtube.com/watch?v={vid['id']}", 
                                 download=False
                             )
                     except Exception:
                         return None
 
-                with ThreadPoolExecutor(max_workers=8) as executor:
-                    futures = [executor.submit(fetch_full, vid) for vid in entries]
-                    full_infos = []
+                with ThreadPoolExecutor(max_workers=15) as executor:
+                    futures = [executor.submit(fetch_metadata_only, vid) for vid in entries]
+                    metadata_infos = []
                     for future in as_completed(futures):
                         try:
                             result = future.result()
                             if result:
-                                full_infos.append(result)
+                                metadata_infos.append(result)
                         except Exception:
                             pass
 
-                status.text(f"🔬 Filtrage par langue : {language}...")
-                progress_bar.progress(int((kw_idx / total_keywords) * 30) + 25)
+                status.text(f"🔬 Filtrage Phase 1 de {len(metadata_infos)} vidéos...")
+                progress_bar.progress(int((kw_idx / total_keywords) * 20) + 15)
 
-                for info in full_infos:
+                # Filtrage Phase 1 (PERMISSIF)
+                candidates = []
+                for info in metadata_infos:
                     if not info:
                         continue
                     
-                    # 1. FILTRE LANGUE (NOUVEAU SYSTÈME ROBUSTE)
-                    if not is_valid_language(info, language):
-                        rejected_count += 1
+                    # 1. FILTRE LANGUE (PERMISSIF - rejette seulement si TRÈS SÛR)
+                    if not is_valid_language(info, language, phase="phase1"):
+                        rejected_phase1 += 1
                         continue
                     
                     # 2. FILTRE DURÉE
@@ -340,16 +447,53 @@ if st.sidebar.button("🚀 Lancer l'analyse", use_container_width=True):
                         if engagement_ratio < min_engagement:
                             continue
 
-                    info['search_keyword'] = kw
-                    all_videos_filtered.append(info)
+                    candidates.append(info)
+
+                # ==========================================
+                # 🚀 PHASE 2 : EXTRACTION COMMENTAIRES
+                # ==========================================
+                if candidates:
+                    status.text(f"💬 Phase 2 : Extraction commentaires ({len(candidates)} vidéos qualifiées)...")
+                    progress_bar.progress(int((kw_idx / total_keywords) * 20) + 18)
+
+                    def fetch_comments_only(info):
+                        """Récupère les commentaires pour une vidéo déjà validée"""
+                        try:
+                            opts = get_ydl_options(language, get_comments=True)
+                            with YoutubeDL(opts) as ydl_comments:
+                                full_info = ydl_comments.extract_info(
+                                    f"https://www.youtube.com/watch?v={info['id']}", 
+                                    download=False
+                                )
+                                info['comments'] = full_info.get('comments', [])
+                                return info
+                        except Exception:
+                            return info
+
+                    with ThreadPoolExecutor(max_workers=12) as executor:
+                        futures = [executor.submit(fetch_comments_only, cand) for cand in candidates]
+                        for future in as_completed(futures):
+                            try:
+                                enriched_info = future.result()
+                                if enriched_info:
+                                    # Validation Phase 2 (MODÉRÉE - plus d'infos)
+                                    if is_valid_language(enriched_info, language, phase="phase2"):
+                                        enriched_info['search_keyword'] = kw
+                                        all_videos_filtered.append(enriched_info)
+                                    else:
+                                        rejected_phase2 += 1
+                            except Exception:
+                                pass
 
             progress_bar.progress(90)
 
             # === AFFICHAGE RÉSULTATS ===
+            total_rejected = rejected_phase1 + rejected_phase2
+            
             if all_videos_filtered:
                 st.success(f"✅ {len(all_videos_filtered)} vidéos trouvées en {language}.")
-                if rejected_count > 0 and language != "Auto (toutes langues)":
-                    st.info(f"🔬 {rejected_count} vidéos rejetées car pas en {language}")
+                if total_rejected > 0 and language != "Auto (toutes langues)":
+                    st.info(f"🔬 {total_rejected} vidéos rejetées (Phase 1: {rejected_phase1}, Phase 2: {rejected_phase2})")
                 
                 left_col, right_col = st.columns([1, 2])
 
@@ -378,7 +522,7 @@ Données à analyser :
                         data_blob += f"Chaîne: {v.get('uploader', 'N/A')}\n"
                         
                         if show_debug:
-                            data_blob += f"[DEBUG] Langue détectée: {v.get('_detected_language', 'N/A')}\n"
+                            data_blob += f"[DEBUG] Langue: {v.get('_detected_language', 'N/A')} | Confiance: {v.get('_detection_confidence', 'N/A')} | Source: {v.get('_detection_source', 'N/A')}\n"
                         
                         comments = v.get('comments') or []
                         if comments:
@@ -399,7 +543,6 @@ Données à analyser :
                         views = v.get('view_count') or 0
                         ratio = views / subs if subs > 0 else 0
                         
-                        # Score de performance
                         if ratio > 2:
                             stars = "🔥🔥🔥"
                         elif ratio > 1:
@@ -408,7 +551,10 @@ Données à analyser :
                             stars = "⭐"
                         
                         detected_lang = v.get('_detected_language', '?')
-                        lang_badge = f"[{detected_lang.upper()}]" if show_debug else ""
+                        confidence = v.get('_detection_confidence', '?')
+                        source = v.get('_detection_source', '?')
+                        
+                        lang_badge = f"[{detected_lang.upper()} • {confidence}]" if show_debug else ""
                         
                         with st.expander(f"#{idx} {stars} | {views:,} vues | {v.get('title', 'N/A')[:55]}... {lang_badge}"):
                             col_img, col_info = st.columns([1, 2])
@@ -426,9 +572,9 @@ Données à analyser :
                                 st.write(f"**Lien :** [Regarder]({v.get('webpage_url', '#')})")
                                 
                                 if show_debug:
-                                    st.write(f"**🔬 Langue détectée :** `{detected_lang}`")
+                                    st.write(f"**🔬 Langue :** `{detected_lang}` (confiance: {confidence})")
+                                    st.write(f"**📊 Source :** `{source}`")
                             
-                            # Afficher quelques commentaires
                             comments = v.get('comments') or []
                             if comments:
                                 st.write("---")
@@ -438,16 +584,16 @@ Données à analyser :
 
             else:
                 st.warning(f"⚠️ Aucune vidéo trouvée correspondant aux critères.")
-                if rejected_count > 0:
-                    st.info(f"🔬 {rejected_count} vidéos ont été rejetées car elles n'étaient pas en {language}")
+                if total_rejected > 0:
+                    st.info(f"🔬 {total_rejected} vidéos rejetées (Phase 1: {rejected_phase1} • Phase 2: {rejected_phase2})")
+                    st.info("💡 **Conseil** : Le filtre est peut-être trop strict. Active le mode debug pour voir les détections.")
 
-            # SAUVEGARDE HISTORIQUE
             st.session_state.search_history.append({
                 'date': datetime.now().strftime('%d/%m %H:%M'),
                 'kw': keywords_list,
                 'lang': language,
                 'found': len(all_videos_filtered),
-                'rejected': rejected_count
+                'rejected': total_rejected
             })
             
             progress_bar.progress(100)
