@@ -174,17 +174,16 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
                     if v.get('automatic_captions') or v.get('subtitles'):
                         prompt += "[Transcription disponible sur le lien]\n"
 
-                    comms = v.get('comments', [])
+              comms = v.get('comments', [])
                     if comms:
-                        prompt += "\n--- SECTION COMMENTAIRES (AVIS UTILISATEURS) ---\n"
-                        # C'EST ICI QUE J'AI CORRIGÉ L'AFFICHAGE POUR ÉVITER LA CONFUSION
-                        for i, c in enumerate(comms[:8], 1): # On affiche les 8 meilleurs pour le prompt
-                            # On nettoie le texte (supprime les sauts de ligne internes du commentaire)
+                        prompt += "\n--- AVIS UTILISATEURS (FORMAT STRICT) ---\n"
+                        
+                        # --- MODIFICATION ICI : On affiche TOUT ce qu'on a téléchargé ---
+                        for i, c in enumerate(comms, 1): 
+                            # On retire les sauts de ligne internes
                             txt = c.get('text', '').replace('\n', ' ').strip()
-                            author = c.get('author', 'Anonyme')
                             likes = c.get('like_count', 0)
-                            
-                            # Format ultra-clair pour l'IA : [Com n°1] "texte"
+                            # On encadre avec des guillemets
                             prompt += f"[Commentaire {i}] ({likes} likes) : \"{txt}\"\n"
                     prompt += "\n" + "="*30 + "\n\n"
                 
