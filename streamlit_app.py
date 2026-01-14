@@ -208,7 +208,7 @@ Propose 3 concepts de vidéos qui répondent spécifiquement aux frustrations et
 - La Promesse : (Qu'est-ce que le spectateur va apprendre ?)
 - Pourquoi ça va marcher : (Justification basée sur les commentaires)
 
-Voici les commentaires à analyser :
+Voici les commentaires à analyser (analyse les commmentaires pour déterminer la langue dans laquelle tu vas répondre ) :
 
 """
                 
