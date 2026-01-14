@@ -124,7 +124,7 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
 
                 url = f"https://www.youtube.com/watch?v={entry['id']}"
                 
-                # --- CONFIGURATION (Identique à ta demande) ---
+                # --- CONFIGURATION (40 coms, Turbo, Transcription) ---
                 opts_full = {
                     'quiet': True,
                     'getcomments': True,
@@ -159,14 +159,14 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
             with ThreadPoolExecutor(max_workers=20) as executor:
                 futures = [executor.submit(process_video, e) for e in entries]
                 
-                # --- C'EST ICI QUE J'AI AJOUTÉ L'ANIMATION DE LA BARRE ---
+                # --- ANIMATION DE LA BARRE ---
                 for i, f in enumerate(as_completed(futures)):
                     res = f.result()
                     if res:
                         res['keyword_source'] = kw
                         all_videos_found.append(res)
                     
-                    # Calcul : On avance un tout petit peu la barre pour chaque vidéo traitée
+                    # Barre fluide
                     kw_progress = (i + 1) / total_entries
                     global_progress = (idx + kw_progress) / total_keywords
                     
@@ -178,7 +178,7 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
 
         status_text.empty()
         
-        # --- 3. AFFICHAGE RÉSULTATS (Identique) ---
+        # --- 3. AFFICHAGE RÉSULTATS ---
         if all_videos_found:
             st.success(f"✅ {len(all_videos_found)} vidéos qualifiées trouvées !")
             
@@ -186,8 +186,31 @@ if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_widt
             
             with col1:
                 st.subheader("📋 Copier pour l'IA")
-                prompt = f"Je veux analyser ces vidéos ({language}) sur le sujet : {', '.join(keywords_list)}.\n"
-                prompt += "Trouve-moi les angles les plus performants et les avis des spectateurs.\n\n"
+                
+                # --- NOUVEAU PROMPT EXPERT INTÉGRÉ ICI ---
+                subjects = ", ".join(keywords_list)
+                prompt = f"""Tu es un expert en stratégie de contenu YouTube et Data Analyst. Voici une liste de commentaires extraits de vidéos populaires sur le sujet : {subjects}
+
+TA MISSION : Analyse ces commentaires pour identifier les opportunités de marché inexploitées. Ignore les commentaires génériques (type "super vidéo", "first"). Concentre-toi sur le fond.
+
+RÉPONDS EXACTEMENT AVEC CETTE STRUCTURE :
+
+📊 PARTIE 1 : ANALYSE DU MARCHÉ
+1. Les Idées Récurrentes : Quels sont les 3-5 sujets de discussion qui reviennent le plus souvent ?
+2. Les Frustrations (Pain Points) : Qu'est-ce qui énerve les gens ? Quels sont leurs problèmes non résolus ?
+3. Les Manques (Gaps) : Qu'est-ce que les gens réclament ? Quelles questions posent-ils sans obtenir de réponse ?
+
+🚀 PARTIE 2 : 3 ANGLES DE VIDÉOS GAGNANTS
+Propose 3 concepts de vidéos qui répondent spécifiquement aux frustrations et aux manques identifiés ci-dessus. Pour chaque angle, utilise ce format :
+
+👉 Angle #X : [Titre accrocheur et Pute-à-clic Éthique]
+- Le Besoin ciblé : (Quel problème identifié en Partie 1 cela résout-il ?)
+- La Promesse : (Qu'est-ce que le spectateur va apprendre ?)
+- Pourquoi ça va marcher : (Justification basée sur les commentaires)
+
+Voici les commentaires à analyser :
+
+"""
                 
                 for v in all_videos_found:
                     prompt += f"=== VIDÉO : {v['title']} ===\n"
