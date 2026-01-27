@@ -149,16 +149,16 @@ class YouTubeScraperConfig:
     
     @staticmethod
     def get_search_opts(cookies_path: Optional[str] = None) -> Dict:
-        """Options pour la recherche"""
+        """Options pour la recherche - OPTIMISÉ POUR VITESSE"""
         opts = {
             'quiet': True,
             'extract_flat': True,
             'ignoreerrors': True,
-            'socket_timeout': 10,
+            'socket_timeout': 5,  # ⚡ Réduit de 10 → 5
             'http_headers': {
                 'User-Agent': random.choice(USER_AGENTS)
             },
-            'sleep_interval': random.uniform(0.5, 1.5),
+            'sleep_interval': random.uniform(0.05, 0.1),  # ⚡ Réduit de 0.5-1.5 → 0.05-0.1
             'sleep_interval_requests': 1,
         }
         if cookies_path and os.path.exists(cookies_path):
@@ -167,21 +167,18 @@ class YouTubeScraperConfig:
     
     @staticmethod
     def get_detailed_opts(cookies_path: Optional[str] = None, max_comments: int = 10) -> Dict:
-        """Options pour l'analyse détaillée"""
+        """Options pour l'analyse détaillée - OPTIMISÉ POUR VITESSE"""
         opts = {
             'quiet': True,
             'getcomments': True,
             'max_comments': max_comments,
             'skip_download': True,
             'ignoreerrors': True,
-            'socket_timeout': 10,
-            'writesubtitles': True,
-            'writeautomaticsub': True,
-            'subtitleslangs': ['all'],
+            'socket_timeout': 5,  # ⚡ Réduit de 10 → 5
             'http_headers': {
                 'User-Agent': random.choice(USER_AGENTS)
             },
-            'sleep_interval': random.uniform(0.5, 1.5),
+            'sleep_interval': random.uniform(0.05, 0.1),  # ⚡ Réduit de 0.5-1.5 → 0.05-0.1
             'sleep_interval_requests': 1,
         }
         if cookies_path and os.path.exists(cookies_path):
@@ -682,7 +679,7 @@ def main():
         
         # Keywords
         for kw in keywords:
-            entries = processor.search_keyword(kw, max_results=40)
+            entries = processor.search_keyword(kw, max_results=20)  # ⚡ Réduit de 40 → 20
             if entries and isinstance(entries, list):
                 for entry in entries:
                     if entry and isinstance(entry, dict):
@@ -704,7 +701,7 @@ def main():
         
         # ✅ FIX: Vérifier que videos_to_process n'est pas vide avant division
         if videos_to_process:
-            with ThreadPoolExecutor(max_workers=15) as executor:
+            with ThreadPoolExecutor(max_workers=40) as executor:  # ⚡ Augmenté de 15 → 40
                 futures = {
                     executor.submit(
                         processor.process_video,
