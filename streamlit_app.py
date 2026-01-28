@@ -150,17 +150,17 @@ class YouTubeScraperConfig:
     
     @staticmethod
     def get_search_opts(cookies_path: Optional[str] = None) -> Dict:
-        """Options pour la recherche - OPTIMISÉ POUR VITESSE"""
+        """Options pour la recherche - ULTRA VITESSE (max 10 secondes)"""
         opts = {
             'quiet': True,
             'extract_flat': True,
             'ignoreerrors': True,
-            'socket_timeout': 5,
+            'socket_timeout': 2,  # ⚡ Réduit de 5 → 2
             'http_headers': {
                 'User-Agent': random.choice(USER_AGENTS)
             },
-            'sleep_interval': random.uniform(0.05, 0.1),
-            'sleep_interval_requests': 1,
+            'sleep_interval': 0,  # ⚡ PAS DE DÉLAI (était 0.05-0.1)
+            'sleep_interval_requests': 0,
         }
         if cookies_path and os.path.exists(cookies_path):
             opts['cookiefile'] = cookies_path
@@ -168,19 +168,19 @@ class YouTubeScraperConfig:
     
     @staticmethod
     def get_detailed_opts(cookies_path: Optional[str] = None, max_comments: int = 10) -> Dict:
-        """Options pour l'analyse détaillée - OPTIMISÉ POUR VITESSE"""
+        """Options pour l'analyse détaillée - ULTRA VITESSE (max 10 secondes)"""
         opts = {
             'quiet': True,
             'getcomments': True,
             'max_comments': max_comments,
             'skip_download': True,
             'ignoreerrors': True,
-            'socket_timeout': 5,
+            'socket_timeout': 2,  # ⚡ Réduit de 5 → 2
             'http_headers': {
                 'User-Agent': random.choice(USER_AGENTS)
             },
-            'sleep_interval': random.uniform(0.05, 0.1),
-            'sleep_interval_requests': 1,
+            'sleep_interval': 0,  # ⚡ PAS DE DÉLAI (était 0.05-0.1)
+            'sleep_interval_requests': 0,
         }
         if cookies_path and os.path.exists(cookies_path):
             opts['cookiefile'] = cookies_path
@@ -315,7 +315,7 @@ class VideoProcessor:
                     info['comments'] = CommentFilter.filter(
                         info['comments'],
                         min_length=50,
-                        max_count=10
+                        max_count=5  # ⚡ Réduit: 10 → 5 (plus rapide)
                     )
                 else:
                     info['comments'] = []
@@ -668,7 +668,7 @@ def main():
         
         # Keywords
         for kw in keywords:
-            entries = processor.search_keyword(kw, max_results=100)  # ✅ FIXÉ: 20 → 100
+            entries = processor.search_keyword(kw, max_results=50)  # ⚡ Optimisé: 100 → 50 (plus rapide)
             if entries and isinstance(entries, list):
                 for entry in entries:
                     if entry and isinstance(entry, dict):
@@ -689,7 +689,7 @@ def main():
         progress_bar.progress(0.6)
         
         if videos_to_process:
-            with ThreadPoolExecutor(max_workers=50) as executor:  # ✅ FIXÉ: 40 → 50
+            with ThreadPoolExecutor(max_workers=80) as executor:  # ⚡ Augmenté: 50 → 80 pour plus de parallélisme
                 futures = {
                     executor.submit(
                         processor.process_video,
@@ -701,9 +701,9 @@ def main():
                 }
                 
                 completed = 0
-                for future in as_completed(futures):
+                for future in as_completed(futures, timeout=8):  # ⚡ Timeout global: 8 secondes max par worker
                     try:
-                        result = future.result()
+                        result = future.result(timeout=8)  # ⚡ Timeout: 8 secondes max
                         if result and isinstance(result, dict):
                             entry = futures[future]
                             result['keyword_source'] = entry.get('keyword_source', 'Unknown')
