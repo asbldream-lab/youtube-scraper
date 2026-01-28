@@ -1,14 +1,8 @@
 """
-🚀 YouTube Keyword Research Tool PRO - V5 STABLE
-==============================================
-Basé sur V3 qui fonctionnait + corrections critiques
-
-CORRECTIONS:
-1. Options yt-dlp TESTÉES et FONCTIONNELLES
-2. Filtre de langue PERMISSIF (accepte en cas de doute)
-3. 20 commentaires avec fallback
-4. Flamme OPTIONNELLE (désactivable si trop lent)
-5. LOGS pour déboguer
+🚀 YouTube Keyword Research Tool PRO - V6 DIAGNOSTIC
+====================================================
+VERSION AVEC DIAGNOSTIC COMPLET
+On va VOIR exactement où ça bloque!
 """
 
 import streamlit as st
@@ -18,487 +12,440 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import random
 from typing import List, Dict, Optional
 import re
+import traceback
 
 # ==========================================
 # 📋 CONFIGURATION
 # ==========================================
 
 st.set_page_config(
-    page_title="YouTube Research Pro V5", 
+    page_title="YouTube Research V6 DIAG", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# Mode debug - mettre à True pour voir les logs
-DEBUG_MODE = True
+# Stockage global des logs pour diagnostic
+if 'diagnostic_logs' not in st.session_state:
+    st.session_state.diagnostic_logs = []
 
-def debug_log(msg: str):
-    """Affiche un log si DEBUG_MODE est activé"""
-    if DEBUG_MODE:
-        print(f"[DEBUG] {msg}")
+if 'filter_stats' not in st.session_state:
+    st.session_state.filter_stats = {
+        'total_searched': 0,
+        'search_results': 0,
+        'details_fetched': 0,
+        'details_failed': 0,
+        'filtered_views': 0,
+        'filtered_date': 0,
+        'filtered_duration': 0,
+        'filtered_language': 0,
+        'passed_all_filters': 0,
+    }
+
+def reset_diagnostics():
+    st.session_state.diagnostic_logs = []
+    st.session_state.filter_stats = {
+        'total_searched': 0,
+        'search_results': 0,
+        'details_fetched': 0,
+        'details_failed': 0,
+        'filtered_views': 0,
+        'filtered_date': 0,
+        'filtered_duration': 0,
+        'filtered_language': 0,
+        'passed_all_filters': 0,
+    }
+
+def log(msg: str, level: str = "INFO"):
+    """Ajoute un log au diagnostic"""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    st.session_state.diagnostic_logs.append(f"[{timestamp}] [{level}] {msg}")
+    print(f"[{timestamp}] [{level}] {msg}")  # Aussi dans le terminal
+
+def increment_stat(key: str, value: int = 1):
+    """Incrémente une statistique"""
+    if key in st.session_state.filter_stats:
+        st.session_state.filter_stats[key] += value
+
 
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Safari/537.36',
 ]
 
-# Mots-clés pour détection de langue SIMPLE (sans dépendance externe)
+# Mots-clés pour détection de langue SIMPLE
 LANGUAGE_KEYWORDS = {
     "French": {
         "code": "fr",
         "markers": ["le", "la", "les", "de", "du", "des", "un", "une", "et", "est", "sont", 
                    "dans", "pour", "sur", "avec", "qui", "que", "ce", "cette", "nous", "vous",
-                   "je", "tu", "il", "elle", "c'est", "n'est", "qu'il", "qu'elle", "très",
-                   "plus", "mais", "aussi", "comme", "tout", "tous", "faire", "fait"]
+                   "je", "tu", "il", "elle", "c'est", "très", "plus", "mais", "aussi", "tout"]
     },
     "English": {
-        "code": "en",
+        "code": "en", 
         "markers": ["the", "and", "is", "are", "was", "were", "have", "has", "been",
                    "this", "that", "with", "for", "not", "you", "all", "can", "had",
-                   "but", "what", "when", "your", "which", "their", "will", "would",
-                   "there", "from", "they", "been", "have", "or", "an", "be", "it"]
+                   "but", "what", "when", "your", "which", "will", "would", "they"]
     },
     "Spanish": {
         "code": "es",
         "markers": ["el", "la", "los", "las", "de", "en", "que", "es", "un", "una",
-                   "por", "con", "para", "como", "más", "pero", "sus", "este", "esta",
-                   "son", "del", "se", "al", "lo", "todo", "esta", "entre", "cuando"]
-    },
-    "German": {
-        "code": "de",
-        "markers": ["der", "die", "das", "und", "ist", "von", "mit", "den", "für",
-                   "auf", "nicht", "sich", "auch", "als", "noch", "nach", "bei", "aus"]
+                   "por", "con", "para", "como", "más", "pero", "sus", "este", "son"]
     },
 }
 
-PROMPT_TEMPLATES = {
-    "French": {
-        "text": """Tu es un expert YouTube. Analyse ces vidéos virales et leurs commentaires pour trouver des opportunités de contenu:\n\nThème recherché: {subjects}\n\n""",
-        "header": "💬 TOP COMMENTAIRES",
-        "label": "Com"
-    },
-    "English": {
-        "text": """You are a YouTube expert. Analyze these viral videos and comments to find content opportunities:\n\nTopic: {subjects}\n\n""",
-        "header": "💬 TOP COMMENTS",
-        "label": "Comment"
-    },
-    "Spanish": {
-        "text": """Eres un experto en YouTube. Analiza estos videos virales y comentarios:\n\nTema: {subjects}\n\n""",
-        "header": "💬 TOP COMENTARIOS",
-        "label": "Comentario"
-    },
-}
-
-# Fallback pour les langues non définies
-for lang in ["Auto (all languages)", "German"]:
-    PROMPT_TEMPLATES[lang] = PROMPT_TEMPLATES["English"]
-
 
 # ==========================================
-# 🛠️ DÉTECTION DE LANGUE (SANS DÉPENDANCE)
+# 🔍 DÉTECTION DE LANGUE (ULTRA PERMISSIVE)
 # ==========================================
 
-class SimpleLanguageDetector:
-    """
-    Détecteur de langue SIMPLE basé sur des mots-clés.
-    Pas de dépendance externe = pas de risque d'erreur.
-    """
-    
-    @staticmethod
-    def detect(text: str) -> Optional[str]:
-        """
-        Détecte la langue d'un texte.
-        Retourne: 'fr', 'en', 'es', 'de' ou None si indéterminé
-        """
-        if not text or len(text) < 10:
-            return None
-        
-        text_lower = text.lower()
-        # Extraire les mots
-        words = set(re.findall(r'\b[a-zàâäéèêëïîôùûüç]+\b', text_lower))
-        
-        scores = {}
-        for lang_name, config in LANGUAGE_KEYWORDS.items():
-            markers = set(config["markers"])
-            # Compter combien de marqueurs sont présents
-            matches = len(words & markers)
-            if matches > 0:
-                scores[config["code"]] = matches
-        
-        if not scores:
-            return None
-        
-        # Retourner la langue avec le plus de matches
-        best_lang = max(scores, key=scores.get)
-        # Seuil minimum: au moins 2 mots marqueurs
-        if scores[best_lang] >= 2:
-            return best_lang
-        
+def detect_language_simple(text: str) -> Optional[str]:
+    """Détecte la langue - retourne 'fr', 'en', 'es' ou None"""
+    if not text or len(text) < 5:
         return None
     
-    @staticmethod
-    def matches_language(text: str, target_lang: str) -> bool:
-        """
-        Vérifie si un texte correspond à la langue cible.
-        PERMISSIF: retourne True en cas de doute.
-        """
-        # Si "Auto", tout est accepté
-        if target_lang == "Auto (all languages)":
-            return True
-        
-        # Si texte trop court, on accepte (pas assez d'info)
-        if not text or len(text) < 20:
-            return True
-        
-        # Récupérer le code ISO de la langue cible
-        target_config = LANGUAGE_KEYWORDS.get(target_lang)
-        if not target_config:
-            return True  # Langue non supportée = accepter
-        
-        target_code = target_config["code"]
-        
-        # Détecter la langue du texte
-        detected = SimpleLanguageDetector.detect(text)
-        
-        # Si on n'a pas pu détecter, on accepte (permissif)
-        if detected is None:
-            return True
-        
-        # Sinon, vérifier si ça correspond
-        return detected == target_code
+    text_lower = text.lower()
+    words = set(re.findall(r'\b[a-zàâäéèêëïîôùûüçñ]+\b', text_lower))
+    
+    scores = {}
+    for lang_name, config in LANGUAGE_KEYWORDS.items():
+        markers = set(config["markers"])
+        matches = len(words & markers)
+        if matches > 0:
+            scores[config["code"]] = matches
+    
+    if not scores:
+        return None
+    
+    return max(scores, key=scores.get)
+
+
+def matches_language(text: str, target_lang: str) -> bool:
+    """
+    ULTRA PERMISSIF - retourne True dans presque tous les cas
+    Ne retourne False que si on est SÛR que c'est pas la bonne langue
+    """
+    # Auto = tout accepté
+    if target_lang == "Auto (all languages)":
+        return True
+    
+    # Texte trop court = accepté
+    if not text or len(text) < 30:
+        return True
+    
+    # Récupérer le code cible
+    target_config = LANGUAGE_KEYWORDS.get(target_lang)
+    if not target_config:
+        return True
+    
+    target_code = target_config["code"]
+    detected = detect_language_simple(text)
+    
+    # Pas détecté = accepté (permissif)
+    if detected is None:
+        return True
+    
+    # Correspond = accepté
+    if detected == target_code:
+        return True
+    
+    # Ne correspond pas MAIS on est permissif pour éviter les faux négatifs
+    # On rejette seulement si on a détecté une AUTRE langue avec confiance
+    text_lower = text.lower()
+    words = set(re.findall(r'\b[a-zàâäéèêëïîôùûüçñ]+\b', text_lower))
+    target_markers = set(target_config["markers"])
+    target_matches = len(words & target_markers)
+    
+    # Si on trouve AU MOINS 1 mot de la langue cible, on accepte
+    if target_matches >= 1:
+        return True
+    
+    # Sinon on rejette
+    return False
 
 
 # ==========================================
-# 🎬 YOUTUBE PROCESSOR
+# 🎬 YOUTUBE PROCESSOR AVEC DIAGNOSTIC
 # ==========================================
 
-class YouTubeProcessor:
+def search_youtube(keyword: str, max_results: int = 20) -> List[Dict]:
     """
-    Processeur YouTube robuste avec options TESTÉES.
+    Recherche YouTube avec diagnostic complet
     """
+    if not keyword or not keyword.strip():
+        log(f"SEARCH: Mot-clé vide, abandon", "WARN")
+        return []
     
-    def __init__(self, language: str = "Auto (all languages)"):
-        self.language = language
-        self.channel_cache = {}  # Cache pour les moyennes de chaînes
+    log(f"SEARCH: Début recherche pour '{keyword}' (max {max_results})")
     
-    def _get_base_opts(self) -> dict:
-        """Options de base communes"""
-        return {
-            'quiet': True,
-            'no_warnings': True,
-            'ignoreerrors': True,
-            'socket_timeout': 15,
-            'http_headers': {'User-Agent': random.choice(USER_AGENTS)},
-        }
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'ignoreerrors': True,
+        'socket_timeout': 20,
+        'http_headers': {'User-Agent': random.choice(USER_AGENTS)},
+        'extract_flat': True,
+    }
     
-    def search_videos(self, keyword: str, max_results: int = 20) -> List[Dict]:
-        """
-        Recherche des vidéos par mot-clé.
-        Retourne une liste d'entrées BRUTES (id + titre basique).
-        """
-        if not keyword or not keyword.strip():
-            debug_log(f"search_videos: mot-clé vide")
-            return []
+    try:
+        search_query = f"ytsearch{max_results}:{keyword.strip()}"
         
-        opts = self._get_base_opts()
-        opts['extract_flat'] = True  # IMPORTANT: True, pas 'in_playlist'
-        
-        try:
-            search_query = f"ytsearch{max_results}:{keyword.strip()}"
-            debug_log(f"search_videos: recherche '{search_query}'")
+        with YoutubeDL(opts) as ydl:
+            result = ydl.extract_info(search_query, download=False)
             
-            with YoutubeDL(opts) as ydl:
-                result = ydl.extract_info(search_query, download=False)
-                
-                if not result:
-                    debug_log(f"search_videos: aucun résultat pour '{keyword}'")
-                    return []
-                
-                entries = result.get('entries', [])
-                valid_entries = []
-                
-                for e in entries:
-                    if e and (e.get('id') or e.get('url')):
-                        # Extraire l'ID de différentes manières possibles
-                        video_id = e.get('id')
-                        if not video_id and e.get('url'):
-                            # Essayer d'extraire l'ID de l'URL
-                            url = e.get('url', '')
-                            if 'watch?v=' in url:
-                                video_id = url.split('watch?v=')[1].split('&')[0]
-                            elif 'youtu.be/' in url:
-                                video_id = url.split('youtu.be/')[1].split('?')[0]
-                        
-                        if video_id:
-                            e['id'] = video_id
-                            valid_entries.append(e)
-                
-                debug_log(f"search_videos: {len(valid_entries)} vidéos trouvées pour '{keyword}'")
-                return valid_entries
-        
-        except Exception as ex:
-            debug_log(f"search_videos ERROR: {ex}")
-            return []
-    
-    def get_video_details(self, video_id: str, get_comments: bool = True) -> Optional[Dict]:
-        """
-        Récupère les détails complets d'une vidéo.
-        """
-        if not video_id:
-            return None
-        
-        opts = self._get_base_opts()
-        opts['skip_download'] = True
-        
-        if get_comments:
-            opts['getcomments'] = True
-            # Format simple qui fonctionne
-            opts['extractor_args'] = {'youtube': {'max_comments': ['100']}}
-        
-        try:
-            url = f"https://www.youtube.com/watch?v={video_id}"
-            debug_log(f"get_video_details: extraction de {video_id}")
+            if not result:
+                log(f"SEARCH: Résultat None pour '{keyword}'", "ERROR")
+                return []
             
-            with YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+            entries = result.get('entries', [])
+            log(f"SEARCH: {len(entries)} entrées brutes reçues")
+            
+            valid_entries = []
+            for i, e in enumerate(entries):
+                if not e:
+                    log(f"SEARCH: Entrée {i} est None", "WARN")
+                    continue
                 
-                if info:
-                    debug_log(f"get_video_details OK: {info.get('title', 'N/A')[:30]}... | vues={info.get('view_count', 0)}")
+                # Essayer d'extraire l'ID
+                video_id = e.get('id')
+                
+                if not video_id:
+                    # Essayer depuis l'URL
+                    url = e.get('url', '') or e.get('webpage_url', '')
+                    if 'watch?v=' in url:
+                        video_id = url.split('watch?v=')[1].split('&')[0]
+                    elif 'youtu.be/' in url:
+                        video_id = url.split('youtu.be/')[1].split('?')[0]
+                    elif '/shorts/' in url:
+                        video_id = url.split('/shorts/')[1].split('?')[0]
+                
+                if video_id:
+                    e['id'] = video_id
+                    valid_entries.append(e)
+                    log(f"SEARCH: Vidéo {i} OK - ID={video_id}, titre={e.get('title', 'N/A')[:40]}")
                 else:
-                    debug_log(f"get_video_details: aucune info pour {video_id}")
-                
-                return info
-        
-        except Exception as ex:
-            debug_log(f"get_video_details ERROR ({video_id}): {ex}")
-            return None
-    
-    def get_channel_videos(self, channel_id: str, max_videos: int = 20) -> List[Dict]:
-        """
-        Récupère les dernières vidéos d'une chaîne (pour calcul flamme).
-        """
-        if not channel_id:
-            return []
-        
-        # Vérifier le cache
-        if channel_id in self.channel_cache:
-            return self.channel_cache[channel_id]
-        
-        opts = self._get_base_opts()
-        opts['extract_flat'] = True
-        opts['playlistend'] = max_videos
-        
-        try:
-            url = f"https://www.youtube.com/channel/{channel_id}/videos"
+                    log(f"SEARCH: Vidéo {i} SKIP - pas d'ID trouvé. Keys: {list(e.keys())}", "WARN")
             
-            with YoutubeDL(opts) as ydl:
-                result = ydl.extract_info(url, download=False)
-                
-                if result and 'entries' in result:
-                    entries = [e for e in result['entries'] if e][:max_videos]
-                    self.channel_cache[channel_id] = entries
-                    return entries
-            
-            return []
-        
-        except Exception as ex:
-            debug_log(f"get_channel_videos ERROR: {ex}")
-            return []
+            log(f"SEARCH: {len(valid_entries)} vidéos valides pour '{keyword}'")
+            increment_stat('search_results', len(valid_entries))
+            return valid_entries
     
-    def process_video(
-        self,
-        video_entry: Dict,
-        min_views: int,
-        min_duration: str,
-        date_limit: Optional[datetime],
-        enable_flame: bool = False
-    ) -> Optional[Dict]:
-        """
-        Traitement complet d'une vidéo:
-        1. Récupère les détails
-        2. Applique les filtres
-        3. Calcule ratio et flamme
-        4. Filtre les commentaires
+    except Exception as ex:
+        log(f"SEARCH ERROR: {ex}", "ERROR")
+        log(f"SEARCH TRACEBACK: {traceback.format_exc()}", "ERROR")
+        return []
+
+
+def get_video_details(video_id: str) -> Optional[Dict]:
+    """
+    Récupère les détails d'une vidéo avec diagnostic
+    """
+    if not video_id:
+        log(f"DETAILS: ID vide", "WARN")
+        return None
+    
+    log(f"DETAILS: Extraction de {video_id}")
+    
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'ignoreerrors': True,
+        'socket_timeout': 20,
+        'http_headers': {'User-Agent': random.choice(USER_AGENTS)},
+        'skip_download': True,
+        'getcomments': True,
+    }
+    
+    try:
+        url = f"https://www.youtube.com/watch?v={video_id}"
         
-        Retourne None si la vidéo ne passe pas les filtres.
-        """
-        video_id = video_entry.get('id')
-        if not video_id:
-            debug_log(f"process_video: pas d'ID dans l'entrée")
-            return None
-        
-        # 1. Récupérer les détails
-        info = self.get_video_details(video_id, get_comments=True)
-        if not info:
-            debug_log(f"process_video: impossible de récupérer {video_id}")
-            return None
-        
-        # 2. FILTRE PAR VUES
-        view_count = info.get('view_count') or 0
-        if view_count < min_views:
-            debug_log(f"process_video SKIP (vues): {video_id} a {view_count} vues < {min_views}")
-            return None
-        
-        # 3. FILTRE PAR DATE
-        if date_limit:
-            upload_date_str = info.get('upload_date')
-            if upload_date_str:
-                try:
-                    upload_date = datetime.strptime(upload_date_str, '%Y%m%d')
-                    if upload_date < date_limit:
-                        debug_log(f"process_video SKIP (date): {video_id} uploadé le {upload_date_str}")
-                        return None
-                except ValueError:
-                    pass  # Date invalide, on ignore le filtre
-        
-        # 4. FILTRE PAR DURÉE
-        duration = info.get('duration') or 0
-        if min_duration == "2 min" and duration < 120:
-            debug_log(f"process_video SKIP (durée): {video_id} dure {duration}s < 120s")
-            return None
-        elif min_duration == "5 min" and duration < 300:
-            debug_log(f"process_video SKIP (durée): {video_id} dure {duration}s < 300s")
-            return None
-        elif min_duration == "10 min" and duration < 600:
-            debug_log(f"process_video SKIP (durée): {video_id} dure {duration}s < 600s")
-            return None
-        
-        # 5. FILTRE PAR LANGUE (PERMISSIF)
-        title = info.get('title', '')
-        description = info.get('description', '')[:300] if info.get('description') else ''
-        text_to_check = f"{title} {description}"
-        
-        if not SimpleLanguageDetector.matches_language(text_to_check, self.language):
-            debug_log(f"process_video SKIP (langue): {video_id} ne correspond pas à {self.language}")
-            return None
-        
-        # ===== VIDÉO ACCEPTÉE - Calculs supplémentaires =====
-        
-        # 6. CALCUL DU RATIO (étoiles)
-        subs = info.get('channel_follower_count') or 1
-        if subs <= 0:
-            subs = 1
-        ratio = view_count / subs
-        info['_ratio'] = ratio
-        info['_stars'] = self._get_stars(ratio)
-        
-        # 7. CALCUL DE LA FLAMME (optionnel)
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            if not info:
+                log(f"DETAILS: Info None pour {video_id}", "ERROR")
+                increment_stat('details_failed')
+                return None
+            
+            # Log des infos clés
+            log(f"DETAILS OK: {video_id}")
+            log(f"  - title: {info.get('title', 'N/A')[:50]}")
+            log(f"  - view_count: {info.get('view_count', 'N/A')}")
+            log(f"  - channel_follower_count: {info.get('channel_follower_count', 'N/A')}")
+            log(f"  - upload_date: {info.get('upload_date', 'N/A')}")
+            log(f"  - duration: {info.get('duration', 'N/A')}")
+            log(f"  - comments: {len(info.get('comments', []) or [])}")
+            
+            increment_stat('details_fetched')
+            return info
+    
+    except Exception as ex:
+        log(f"DETAILS ERROR ({video_id}): {ex}", "ERROR")
+        increment_stat('details_failed')
+        return None
+
+
+def process_single_video(
+    video_entry: Dict,
+    min_views: int,
+    min_duration: str,
+    date_limit: Optional[datetime],
+    target_language: str,
+    bypass_filters: bool = False
+) -> Optional[Dict]:
+    """
+    Traite une vidéo avec diagnostic détaillé de chaque filtre
+    """
+    video_id = video_entry.get('id')
+    if not video_id:
+        log(f"PROCESS: Pas d'ID dans l'entrée", "WARN")
+        return None
+    
+    log(f"PROCESS: Début traitement {video_id}")
+    
+    # 1. Récupérer les détails
+    info = get_video_details(video_id)
+    if not info:
+        log(f"PROCESS: Impossible de récupérer détails pour {video_id}", "ERROR")
+        return None
+    
+    # Si bypass_filters, on skip tous les filtres
+    if bypass_filters:
+        log(f"PROCESS: BYPASS mode - skip tous les filtres")
+        info['_ratio'] = 1.0
+        info['_stars'] = "⭐"
         info['_has_flame'] = False
-        info['_channel_avg'] = 0
-        
-        if enable_flame:
-            channel_id = info.get('channel_id')
-            if channel_id:
-                channel_videos = self.get_channel_videos(channel_id)
-                if channel_videos:
-                    views_list = []
-                    for cv in channel_videos:
-                        cv_views = cv.get('view_count')
-                        if cv_views and cv_views > 0:
-                            views_list.append(cv_views)
-                    
-                    if views_list:
-                        avg_views = sum(views_list) / len(views_list)
-                        info['_channel_avg'] = avg_views
-                        if view_count > avg_views:
-                            info['_has_flame'] = True
-                            debug_log(f"process_video FLAME: {video_id} a {view_count} vues > {avg_views:.0f} moyenne")
-        
-        # 8. FILTRER LES COMMENTAIRES (top 20)
-        raw_comments = info.get('comments') or []
-        if raw_comments:
-            # Trier par likes
-            sorted_comments = sorted(
-                [c for c in raw_comments if isinstance(c, dict) and c.get('text')],
-                key=lambda x: x.get('like_count', 0) or 0,
-                reverse=True
-            )
-            info['comments'] = sorted_comments[:20]
-            debug_log(f"process_video: {len(info['comments'])} commentaires pour {video_id}")
-        else:
-            info['comments'] = []
-        
-        debug_log(f"process_video OK: {video_id} | ratio={ratio:.2f} | flamme={info['_has_flame']}")
+        info['comments'] = (info.get('comments') or [])[:20]
+        increment_stat('passed_all_filters')
         return info
     
-    @staticmethod
-    def _get_stars(ratio: float) -> str:
-        """
-        Système d'étoiles:
-        - < 1x abonnés = ⭐
-        - >= 1x abonnés = ⭐⭐
-        - >= 2x abonnés = ⭐⭐⭐
-        """
-        if ratio >= 2:
-            return "⭐⭐⭐"
-        elif ratio >= 1:
-            return "⭐⭐"
-        return "⭐"
-
-
-# ==========================================
-# 📊 ANALYSE ET TRI
-# ==========================================
-
-def sort_videos_by_performance(videos: List[Dict]) -> List[Dict]:
-    """
-    Trie les vidéos:
-    1. Flammes d'abord (🔥)
-    2. Par ratio décroissant
-    """
-    def sort_key(v):
-        flame_priority = 1 if v.get('_has_flame') else 0
-        ratio = v.get('_ratio', 0)
-        return (flame_priority, ratio)
+    # 2. FILTRE VUES
+    view_count = info.get('view_count')
+    if view_count is None:
+        log(f"PROCESS: view_count est None pour {video_id} - on accepte quand même", "WARN")
+        view_count = 0
     
-    return sorted(videos, key=sort_key, reverse=True)
+    if view_count < min_views:
+        log(f"FILTER VIEWS: {video_id} REJETÉ - {view_count} < {min_views}", "FILTER")
+        increment_stat('filtered_views')
+        return None
+    log(f"FILTER VIEWS: {video_id} OK - {view_count} >= {min_views}")
+    
+    # 3. FILTRE DATE
+    if date_limit:
+        upload_date_str = info.get('upload_date')
+        if upload_date_str:
+            try:
+                upload_date = datetime.strptime(upload_date_str, '%Y%m%d')
+                if upload_date < date_limit:
+                    log(f"FILTER DATE: {video_id} REJETÉ - {upload_date_str} trop ancien", "FILTER")
+                    increment_stat('filtered_date')
+                    return None
+                log(f"FILTER DATE: {video_id} OK - {upload_date_str}")
+            except ValueError:
+                log(f"FILTER DATE: {video_id} date invalide '{upload_date_str}' - accepté", "WARN")
+    
+    # 4. FILTRE DURÉE
+    duration = info.get('duration') or 0
+    if min_duration == "2 min" and duration < 120:
+        log(f"FILTER DURATION: {video_id} REJETÉ - {duration}s < 120s", "FILTER")
+        increment_stat('filtered_duration')
+        return None
+    elif min_duration == "5 min" and duration < 300:
+        log(f"FILTER DURATION: {video_id} REJETÉ - {duration}s < 300s", "FILTER")
+        increment_stat('filtered_duration')
+        return None
+    elif min_duration == "10 min" and duration < 600:
+        log(f"FILTER DURATION: {video_id} REJETÉ - {duration}s < 600s", "FILTER")
+        increment_stat('filtered_duration')
+        return None
+    log(f"FILTER DURATION: {video_id} OK - {duration}s")
+    
+    # 5. FILTRE LANGUE
+    title = info.get('title', '')
+    description = (info.get('description') or '')[:500]
+    text_to_check = f"{title} {description}"
+    
+    if not matches_language(text_to_check, target_language):
+        detected = detect_language_simple(text_to_check)
+        log(f"FILTER LANG: {video_id} REJETÉ - détecté={detected}, cible={target_language}", "FILTER")
+        log(f"  Texte analysé: {text_to_check[:100]}...", "FILTER")
+        increment_stat('filtered_language')
+        return None
+    log(f"FILTER LANG: {video_id} OK")
+    
+    # ===== TOUS LES FILTRES PASSÉS =====
+    log(f"PROCESS: {video_id} A PASSÉ TOUS LES FILTRES! ✅")
+    increment_stat('passed_all_filters')
+    
+    # Calcul du ratio
+    subs = info.get('channel_follower_count') or 1
+    if subs <= 0:
+        subs = 1
+    ratio = view_count / subs
+    info['_ratio'] = ratio
+    
+    if ratio >= 2:
+        info['_stars'] = "⭐⭐⭐"
+    elif ratio >= 1:
+        info['_stars'] = "⭐⭐"
+    else:
+        info['_stars'] = "⭐"
+    
+    info['_has_flame'] = False
+    
+    # Commentaires (top 20)
+    raw_comments = info.get('comments') or []
+    if raw_comments:
+        sorted_comments = sorted(
+            [c for c in raw_comments if isinstance(c, dict) and c.get('text')],
+            key=lambda x: x.get('like_count', 0) or 0,
+            reverse=True
+        )
+        info['comments'] = sorted_comments[:20]
+    else:
+        info['comments'] = []
+    
+    return info
+
+
+# ==========================================
+# 📊 TRI ET PROMPT
+# ==========================================
+
+def sort_videos(videos: List[Dict]) -> List[Dict]:
+    """Trie par ratio décroissant"""
+    return sorted(videos, key=lambda v: v.get('_ratio', 0), reverse=True)
 
 
 def build_prompt(videos: List[Dict], keywords: List[str], lang: str) -> str:
-    """Génère le prompt pour Claude"""
+    """Génère le prompt"""
     if not videos:
-        return "Aucune vidéo trouvée."
+        return "Aucune vidéo."
     
-    template = PROMPT_TEMPLATES.get(lang, PROMPT_TEMPLATES["English"])
-    subjects = ", ".join(keywords) if keywords else "Non spécifié"
+    subjects = ", ".join(keywords) if keywords else "N/A"
+    prompt = f"Analyse ces {len(videos)} vidéos virales sur le thème: {subjects}\n\n"
     
-    prompt = template["text"].format(subjects=subjects)
-    prompt += f"📊 {len(videos)} vidéos analysées\n\n"
-    
-    for idx, video in enumerate(videos, 1):
-        title = video.get('title', 'Titre inconnu')
-        url = video.get('webpage_url', '')
-        views = video.get('view_count', 0)
-        subs = video.get('channel_follower_count', 0)
-        ratio = video.get('_ratio', 0)
-        stars = video.get('_stars', '⭐')
-        has_flame = video.get('_has_flame', False)
-        channel_avg = video.get('_channel_avg', 0)
-        channel = video.get('uploader', 'Chaîne inconnue')
+    for idx, v in enumerate(videos, 1):
+        title = v.get('title', '?')
+        url = v.get('webpage_url', '')
+        views = v.get('view_count', 0)
+        subs = v.get('channel_follower_count', 0)
+        ratio = v.get('_ratio', 0)
+        stars = v.get('_stars', '⭐')
         
-        # En-tête
-        flame_str = " 🔥" if has_flame else ""
-        prompt += f"{'='*60}\n"
-        prompt += f"#{idx} {stars}{flame_str} | {title}\n"
-        prompt += f"{'='*60}\n"
-        prompt += f"📺 Chaîne: {channel}\n"
+        prompt += f"{'='*50}\n"
+        prompt += f"#{idx} {stars} | {title}\n"
+        prompt += f"{'='*50}\n"
         prompt += f"🔗 {url}\n"
-        prompt += f"👁️ Vues: {views:,} | 👥 Abonnés: {subs:,} | 📊 Ratio: {ratio:.2f}x\n"
+        prompt += f"👁️ Vues: {views:,} | 👥 Abonnés: {subs:,} | Ratio: {ratio:.2f}x\n"
         
-        if has_flame and channel_avg:
-            prompt += f"🔥 SURPERFORME: {views:,} vues vs {channel_avg:,.0f} en moyenne\n"
-        
-        # Commentaires
-        comments = video.get('comments', [])
+        comments = v.get('comments', [])
         if comments:
-            prompt += f"\n{template['header']} ({len(comments)})\n"
-            prompt += "-" * 40 + "\n"
+            prompt += f"\n💬 TOP {len(comments)} COMMENTAIRES:\n"
             for i, c in enumerate(comments, 1):
-                text = c.get('text', '').replace('\n', ' ')[:200]
+                text = c.get('text', '').replace('\n', ' ')[:150]
                 likes = c.get('like_count', 0)
-                prompt += f"[{i}] ({likes}👍) {text}\n\n"
-        else:
-            prompt += "\n⚠️ Commentaires non disponibles\n"
+                prompt += f"[{i}] ({likes}👍) {text}\n"
         
         prompt += "\n"
     
@@ -510,15 +457,15 @@ def build_prompt(videos: List[Dict], keywords: List[str], lang: str) -> str:
 # ==========================================
 
 def render_sidebar() -> dict:
-    """Affiche et récupère les paramètres de la sidebar"""
-    st.sidebar.title("🔍 YouTube Research V5")
+    st.sidebar.title("🔍 YouTube Research V6")
+    st.sidebar.caption("Version DIAGNOSTIC")
     
     # Mots-clés
     st.sidebar.header("📝 Mots-clés")
     keywords_text = st.sidebar.text_area(
         "Un par ligne",
-        height=100,
-        placeholder="trump\nelon musk\nmacron"
+        height=80,
+        placeholder="trump\nmacron\nelon musk"
     )
     keywords = [k.strip() for k in keywords_text.split('\n') if k.strip()]
     
@@ -529,13 +476,13 @@ def render_sidebar() -> dict:
     
     language = st.sidebar.selectbox(
         "🌍 Langue",
-        ["Auto (all languages)", "French", "English", "Spanish", "German"]
+        ["Auto (all languages)", "French", "English", "Spanish"]
     )
     
     min_views = st.sidebar.number_input(
         "👁️ Vues minimum",
-        value=50000,  # Réduit à 50k par défaut pour avoir plus de résultats
-        step=10000,
+        value=10000,  # RÉDUIT pour plus de résultats
+        step=5000,
         min_value=0
     )
     
@@ -549,7 +496,6 @@ def render_sidebar() -> dict:
         ["Tout", "7 jours", "30 jours", "6 mois", "1 an"]
     )
     
-    # Conversion période -> date limite
     date_limit = None
     if date_period == "7 jours":
         date_limit = datetime.now() - timedelta(days=7)
@@ -562,28 +508,31 @@ def render_sidebar() -> dict:
     
     st.sidebar.divider()
     
-    # Options avancées
+    # Options
     st.sidebar.header("⚙️ Options")
     
     videos_per_keyword = st.sidebar.slider(
-        "Vidéos recherchées par mot-clé",
-        min_value=5,
-        max_value=30,
-        value=15
-    )
-    
-    enable_flame = st.sidebar.checkbox(
-        "🔥 Analyser surperformance",
-        value=False,  # Désactivé par défaut car ralentit
-        help="Compare avec les 20 dernières vidéos de la chaîne (plus lent)"
+        "Vidéos par mot-clé",
+        min_value=3,
+        max_value=20,
+        value=10
     )
     
     max_workers = st.sidebar.slider(
         "Threads parallèles",
-        min_value=3,
-        max_value=20,
-        value=10,
-        help="Plus = plus rapide mais risque de blocage YouTube"
+        min_value=1,
+        max_value=10,
+        value=5
+    )
+    
+    # Option de debug
+    st.sidebar.divider()
+    st.sidebar.header("🔧 Debug")
+    
+    bypass_filters = st.sidebar.checkbox(
+        "🚫 BYPASS tous les filtres",
+        value=False,
+        help="Désactive TOUS les filtres pour voir si le problème vient des filtres"
     )
     
     return {
@@ -593,24 +542,75 @@ def render_sidebar() -> dict:
         'min_duration': min_duration,
         'date_limit': date_limit,
         'videos_per_keyword': videos_per_keyword,
-        'enable_flame': enable_flame,
         'max_workers': max_workers,
+        'bypass_filters': bypass_filters,
     }
 
 
+def render_diagnostics():
+    """Affiche la section de diagnostic"""
+    st.divider()
+    st.header("🔬 DIAGNOSTIC COMPLET")
+    
+    # Stats des filtres
+    stats = st.session_state.filter_stats
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("🔍 Vidéos recherchées", stats['search_results'])
+    col2.metric("📥 Détails récupérés", stats['details_fetched'])
+    col3.metric("❌ Détails échoués", stats['details_failed'])
+    col4.metric("✅ Passé tous filtres", stats['passed_all_filters'])
+    
+    st.subheader("📊 Filtres appliqués")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("🚫 Filtrées (vues)", stats['filtered_views'], delta_color="inverse")
+    col2.metric("🚫 Filtrées (date)", stats['filtered_date'], delta_color="inverse")
+    col3.metric("🚫 Filtrées (durée)", stats['filtered_duration'], delta_color="inverse")
+    col4.metric("🚫 Filtrées (langue)", stats['filtered_language'], delta_color="inverse")
+    
+    # Logs détaillés
+    st.subheader("📜 Logs détaillés")
+    logs = st.session_state.diagnostic_logs
+    
+    if logs:
+        # Filtrer par type
+        log_filter = st.multiselect(
+            "Filtrer les logs",
+            ["INFO", "WARN", "ERROR", "FILTER"],
+            default=["INFO", "WARN", "ERROR", "FILTER"]
+        )
+        
+        filtered_logs = [l for l in logs if any(f"[{f}]" in l for f in log_filter)]
+        
+        # Afficher dans une zone scrollable
+        log_text = "\n".join(filtered_logs[-200:])  # 200 derniers
+        st.text_area(
+            f"Logs ({len(filtered_logs)} entrées)",
+            value=log_text,
+            height=400
+        )
+        
+        # Bouton pour télécharger tous les logs
+        st.download_button(
+            "📥 Télécharger tous les logs",
+            data="\n".join(logs),
+            file_name="youtube_research_logs.txt",
+            mime="text/plain"
+        )
+    else:
+        st.info("Aucun log. Lance une analyse pour voir les logs.")
+
+
 def render_video_card(video: Dict, idx: int):
-    """Affiche une carte de vidéo avec commentaires"""
+    """Affiche une carte vidéo"""
     ratio = video.get('_ratio', 0)
     stars = video.get('_stars', '⭐')
-    has_flame = video.get('_has_flame', False)
     views = video.get('view_count', 0)
     title = video.get('title', 'Sans titre')
     
-    flame_str = " 🔥" if has_flame else ""
-    header = f"#{idx} {stars}{flame_str} | {ratio:.1f}x | {views:,} vues"
+    header = f"#{idx} {stars} | {ratio:.1f}x | {views:,} vues"
     
-    with st.expander(header, expanded=(idx <= 2)):
-        # Info principale
+    with st.expander(header, expanded=(idx <= 3)):
         col1, col2 = st.columns([1, 2])
         
         with col1:
@@ -623,180 +623,173 @@ def render_video_card(video: Dict, idx: int):
             st.write(f"📺 {video.get('uploader', 'Inconnu')}")
             st.write(f"👥 Abonnés: {video.get('channel_follower_count', 0):,}")
             st.write(f"👁️ Vues: {views:,}")
-            st.write(f"📊 Ratio: **{ratio:.2f}x** {stars}")
-            
-            if has_flame:
-                avg = video.get('_channel_avg', 0)
-                st.success(f"🔥 Surperforme! (moyenne: {avg:,.0f})")
+            st.write(f"📊 Ratio: **{ratio:.2f}x**")
             
             url = video.get('webpage_url', '')
             if url:
-                st.link_button("▶️ Voir sur YouTube", url)
+                st.link_button("▶️ YouTube", url)
         
         # Commentaires
         comments = video.get('comments', [])
         if comments:
             st.divider()
-            st.subheader(f"💬 Top {len(comments)} Commentaires")
-            
+            st.subheader(f"💬 {len(comments)} Commentaires")
             for i, c in enumerate(comments, 1):
                 text = c.get('text', '')
                 likes = c.get('like_count', 0)
-                author = c.get('author', 'Anonyme')
-                
-                with st.container():
-                    st.markdown(f"**#{i}** - _{author}_ ({likes} 👍)")
-                    st.text(text[:500] + ('...' if len(text) > 500 else ''))
-                    st.markdown("---")
+                st.markdown(f"**#{i}** ({likes}👍)")
+                st.text(text[:300])
+                st.markdown("---")
 
 
 def main():
-    st.title("🚀 YouTube Research Tool PRO V5")
-    st.caption("Trouve les vidéos virales et analyse leurs commentaires")
+    st.title("🚀 YouTube Research V6 - DIAGNOSTIC")
+    st.caption("Version avec logs complets pour identifier le problème")
     
-    # Sidebar
     params = render_sidebar()
     
-    # Zone de logs (si debug activé)
-    if DEBUG_MODE:
-        log_container = st.expander("🔧 Logs de debug", expanded=False)
-    
     # Bouton principal
-    if st.sidebar.button("🚀 LANCER L'ANALYSE", type="primary", use_container_width=True):
+    if st.sidebar.button("🚀 LANCER", type="primary", use_container_width=True):
         
         if not params['keywords']:
             st.error("❌ Entre au moins un mot-clé!")
             return
         
-        # Progress
+        # Reset diagnostics
+        reset_diagnostics()
+        
+        log("="*50)
+        log("DÉBUT DE L'ANALYSE")
+        log(f"Mots-clés: {params['keywords']}")
+        log(f"Langue: {params['language']}")
+        log(f"Vues min: {params['min_views']}")
+        log(f"Durée min: {params['min_duration']}")
+        log(f"Bypass filtres: {params['bypass_filters']}")
+        log("="*50)
+        
         progress = st.progress(0)
         status = st.status("Initialisation...", expanded=True)
         
-        processor = YouTubeProcessor(params['language'])
         all_raw_videos = []
         
         # ===== ÉTAPE 1: RECHERCHE =====
-        status.update(label="🔍 Recherche des vidéos...", state="running")
+        status.update(label="🔍 Recherche...", state="running")
         
         for i, kw in enumerate(params['keywords']):
             status.write(f"Recherche: '{kw}'...")
-            entries = processor.search_videos(kw, params['videos_per_keyword'])
+            increment_stat('total_searched')
             
-            for entry in entries:
-                entry['_source_keyword'] = kw
-                all_raw_videos.append(entry)
+            entries = search_youtube(kw, params['videos_per_keyword'])
             
-            progress.progress((i + 1) / len(params['keywords']) * 0.25)
+            for e in entries:
+                e['_source_keyword'] = kw
+                all_raw_videos.append(e)
+            
+            progress.progress((i + 1) / len(params['keywords']) * 0.3)
         
-        status.write(f"✅ {len(all_raw_videos)} vidéos trouvées au total")
+        log(f"RECHERCHE TERMINÉE: {len(all_raw_videos)} vidéos brutes")
+        status.write(f"✅ {len(all_raw_videos)} vidéos trouvées")
         
         if not all_raw_videos:
-            status.update(label="❌ Aucune vidéo trouvée", state="error")
-            st.error("Aucune vidéo trouvée. Vérifie tes mots-clés.")
+            status.update(label="❌ Aucune vidéo", state="error")
+            st.error("La recherche n'a retourné aucune vidéo. Vérifie ta connexion internet.")
+            render_diagnostics()
             return
         
-        # ===== ÉTAPE 2: ANALYSE PARALLÈLE =====
+        # ===== ÉTAPE 2: TRAITEMENT =====
         status.update(label=f"⏳ Analyse de {len(all_raw_videos)} vidéos...", state="running")
         
-        processed_videos = []
+        processed = []
         total = len(all_raw_videos)
-        completed = 0
-        skipped = 0
+        done = 0
         
-        with ThreadPoolExecutor(max_workers=params['max_workers']) as executor:
-            futures = {
-                executor.submit(
-                    processor.process_video,
+        # Traitement séquentiel pour mieux voir les logs (ou parallèle)
+        if params['max_workers'] <= 1:
+            # Séquentiel
+            for entry in all_raw_videos:
+                result = process_single_video(
                     entry,
                     params['min_views'],
                     params['min_duration'],
                     params['date_limit'],
-                    params['enable_flame']
-                ): entry for entry in all_raw_videos
-            }
-            
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    if result:
-                        processed_videos.append(result)
-                    else:
-                        skipped += 1
-                except Exception as ex:
-                    skipped += 1
-                    debug_log(f"Future error: {ex}")
+                    params['language'],
+                    params['bypass_filters']
+                )
+                if result:
+                    processed.append(result)
                 
-                completed += 1
-                pct = 0.25 + (completed / total) * 0.65
-                progress.progress(min(pct, 0.9))
+                done += 1
+                progress.progress(0.3 + (done / total) * 0.6)
+                status.write(f"Traité: {done}/{total}")
+        else:
+            # Parallèle
+            with ThreadPoolExecutor(max_workers=params['max_workers']) as executor:
+                futures = {
+                    executor.submit(
+                        process_single_video,
+                        entry,
+                        params['min_views'],
+                        params['min_duration'],
+                        params['date_limit'],
+                        params['language'],
+                        params['bypass_filters']
+                    ): entry for entry in all_raw_videos
+                }
                 
-                if completed % 10 == 0:
-                    status.write(f"Analysé: {completed}/{total} ({len(processed_videos)} validées)")
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()
+                        if result:
+                            processed.append(result)
+                    except Exception as ex:
+                        log(f"FUTURE ERROR: {ex}", "ERROR")
+                    
+                    done += 1
+                    progress.progress(0.3 + (done / total) * 0.6)
         
-        status.write(f"✅ Analyse terminée: {len(processed_videos)} vidéos validées, {skipped} filtrées")
+        log(f"TRAITEMENT TERMINÉ: {len(processed)} vidéos validées")
         
         # ===== ÉTAPE 3: TRI =====
-        status.update(label="📊 Tri par performance...", state="running")
-        
-        if processed_videos:
-            processed_videos = sort_videos_by_performance(processed_videos)
+        if processed:
+            processed = sort_videos(processed)
         
         progress.progress(1.0)
         
         # ===== RÉSULTATS =====
-        if not processed_videos:
-            status.update(label="❌ Aucune vidéo ne correspond", state="error")
-            st.error("""
-            ❌ Aucune vidéo ne correspond à tes critères.
-            
-            **Essaie:**
-            - Réduire le nombre de vues minimum (ex: 10000)
-            - Mettre la langue sur "Auto"
-            - Élargir la période
-            - Utiliser des mots-clés plus populaires
-            """)
+        if not processed:
+            status.update(label="❌ Aucune vidéo validée", state="error")
+            st.error("Aucune vidéo n'a passé les filtres. Regarde le DIAGNOSTIC ci-dessous!")
+            render_diagnostics()
             return
         
-        status.update(label=f"✅ {len(processed_videos)} vidéos trouvées!", state="complete")
+        status.update(label=f"✅ {len(processed)} vidéos!", state="complete")
         
         # Stats
-        flame_count = sum(1 for v in processed_videos if v.get('_has_flame'))
-        col_stat1, col_stat2, col_stat3 = st.columns(3)
-        col_stat1.metric("📹 Vidéos", len(processed_videos))
-        col_stat2.metric("🔥 Surperformantes", flame_count)
-        col_stat3.metric("⭐ Moyenne ratio", f"{sum(v.get('_ratio', 0) for v in processed_videos) / len(processed_videos):.2f}x")
+        col1, col2 = st.columns(2)
+        col1.metric("📹 Vidéos trouvées", len(processed))
+        col2.metric("📊 Ratio moyen", f"{sum(v.get('_ratio', 0) for v in processed) / len(processed):.2f}x")
         
-        # Layout résultats
+        # Résultats
         col_prompt, col_videos = st.columns([1, 2])
         
         with col_prompt:
-            st.subheader("📋 Prompt pour Claude")
-            prompt = build_prompt(processed_videos, params['keywords'], params['language'])
-            st.text_area("Copie ce prompt:", value=prompt, height=600)
-            st.download_button(
-                "📥 Télécharger",
-                data=prompt,
-                file_name="youtube_research.txt",
-                mime="text/plain",
-                use_container_width=True
-            )
+            st.subheader("📋 Prompt")
+            prompt = build_prompt(processed, params['keywords'], params['language'])
+            st.text_area("Copie:", value=prompt, height=500)
+            st.download_button("📥 Télécharger", data=prompt, file_name="prompt.txt")
         
         with col_videos:
-            st.subheader("📹 Résultats")
-            
-            tab_all, tab_flame = st.tabs(["📊 Toutes", "🔥 Surperformantes"])
-            
-            with tab_all:
-                for idx, video in enumerate(processed_videos[:20], 1):
-                    render_video_card(video, idx)
-            
-            with tab_flame:
-                flame_videos = [v for v in processed_videos if v.get('_has_flame')]
-                if flame_videos:
-                    for idx, video in enumerate(flame_videos, 1):
-                        render_video_card(video, idx)
-                else:
-                    st.info("Aucune vidéo surperformante. Active l'option 🔥 dans la sidebar.")
+            st.subheader("📹 Vidéos")
+            for idx, v in enumerate(processed[:15], 1):
+                render_video_card(v, idx)
+        
+        # Diagnostic
+        render_diagnostics()
+    
+    else:
+        # Afficher diagnostic même sans lancer
+        if st.session_state.diagnostic_logs:
+            render_diagnostics()
 
 
 if __name__ == "__main__":
