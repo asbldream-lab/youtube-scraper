@@ -1,6 +1,7 @@
 """
 🚀 YouTube Keyword Research Tool PRO - V2 (FULLY AUDITED & BUG-FREE)
 Architecture modulaire, anti-ban, et optimisation des commentaires
+FIXED: max_results augmenté pour trouver plus de vidéos
 """
 
 import streamlit as st
@@ -154,11 +155,11 @@ class YouTubeScraperConfig:
             'quiet': True,
             'extract_flat': True,
             'ignoreerrors': True,
-            'socket_timeout': 5,  # ⚡ Réduit de 10 → 5
+            'socket_timeout': 5,
             'http_headers': {
                 'User-Agent': random.choice(USER_AGENTS)
             },
-            'sleep_interval': random.uniform(0.05, 0.1),  # ⚡ Réduit de 0.5-1.5 → 0.05-0.1
+            'sleep_interval': random.uniform(0.05, 0.1),
             'sleep_interval_requests': 1,
         }
         if cookies_path and os.path.exists(cookies_path):
@@ -174,11 +175,11 @@ class YouTubeScraperConfig:
             'max_comments': max_comments,
             'skip_download': True,
             'ignoreerrors': True,
-            'socket_timeout': 5,  # ⚡ Réduit de 10 → 5
+            'socket_timeout': 5,
             'http_headers': {
                 'User-Agent': random.choice(USER_AGENTS)
             },
-            'sleep_interval': random.uniform(0.05, 0.1),  # ⚡ Réduit de 0.5-1.5 → 0.05-0.1
+            'sleep_interval': random.uniform(0.05, 0.1),
             'sleep_interval_requests': 1,
         }
         if cookies_path and os.path.exists(cookies_path):
@@ -192,21 +193,22 @@ class LanguageValidator:
     @staticmethod
     def validate(text: str, language_name: str) -> bool:
         """Vérifie si le texte correspond à la langue"""
+        # ✅ FIX: Si Auto, accepter toutes les langues
         if language_name == "Auto (all languages)":
             return True
         
         if not text or len(text) < 5:
-            return False
+            # ✅ FIX: Texte trop court = accepter quand même (pour les titres courts)
+            return True
         
-        # ✅ FIX: Vérifier que language_name existe dans config
         if language_name not in LANGUAGE_CONFIG:
             return True
         
         target_code = LANGUAGE_CONFIG[language_name]["code"]
         
-        # ✅ FIX: Spécifier les exceptions au lieu de bare except
         try:
-            if detect(text) == target_code:
+            detected = detect(text)
+            if detected == target_code:
                 return True
         except (LangDetectException, ValueError):
             pass
@@ -214,7 +216,9 @@ class LanguageValidator:
         text_lower = text.lower()
         helpers = LANGUAGE_CONFIG[language_name]["helpers"]
         count = sum(1 for h in helpers if f" {h} " in text_lower)
-        return count >= 2
+        
+        # ✅ FIX: Rendre moins strict - accepter si 1 helper ou plus (au lieu de 2)
+        return count >= 1
 
 
 class CommentFilter:
@@ -231,7 +235,6 @@ class CommentFilter:
         if not comments or not isinstance(comments, list):
             return []
         
-        # ✅ FIX: Vérifier que les commentaires ont la bonne structure
         valid_comments = [c for c in comments if isinstance(c, dict) and 'text' in c]
         
         if not valid_comments:
@@ -268,7 +271,6 @@ class VideoProcessor:
         date_limit: Optional[datetime]
     ) -> Optional[Dict]:
         """Extrait les infos d'une vidéo"""
-        # ✅ FIX: Vérifier que video_id est valide
         if not video_id or not isinstance(video_id, str):
             return None
         
@@ -279,7 +281,6 @@ class VideoProcessor:
             with YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 
-                # ✅ FIX: Vérifier que info n'est pas None
                 if not info or not isinstance(info, dict):
                     return None
                 
@@ -304,7 +305,7 @@ class VideoProcessor:
                 if min_duration == "5 min" and duration < 300:
                     return None
                 
-                # Filtre par langue
+                # ✅ FIX: Filtre de langue moins strict
                 full_text = f"{info.get('title', '')} {info.get('description', '')[:500]}"
                 if not LanguageValidator.validate(full_text, self.language):
                     return None
@@ -325,9 +326,8 @@ class VideoProcessor:
             logger.warning(f"Error processing video {video_id}: {str(e)}")
             return None
     
-    def search_keyword(self, keyword: str, max_results: int = 40) -> List[Dict]:
+    def search_keyword(self, keyword: str, max_results: int = 100) -> List[Dict]:
         """Recherche des vidéos par mot-clé"""
-        # ✅ FIX: Vérifier que keyword est valide
         if not keyword or not isinstance(keyword, str):
             return []
         
@@ -348,7 +348,6 @@ class VideoProcessor:
             with YoutubeDL(opts) as ydl:
                 res = ydl.extract_info(f"ytsearch{max_results}:{search_query}", download=False)
                 
-                # ✅ FIX: Vérifier que res n'est pas None et a la bonne structure
                 if res and isinstance(res, dict) and 'entries' in res:
                     entries = res.get('entries', [])
                     return [e for e in entries if e and isinstance(e, dict)]
@@ -361,7 +360,6 @@ class VideoProcessor:
     
     def get_direct_video(self, url: str) -> Optional[Dict]:
         """Récupère une vidéo via URL directe"""
-        # ✅ FIX: Vérifier que URL est valide
         if not url or not isinstance(url, str) or not url.startswith('http'):
             return None
         
@@ -371,7 +369,6 @@ class VideoProcessor:
             with YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 
-                # ✅ FIX: Vérifier que info n'est pas None
                 if info and isinstance(info, dict):
                     return info
                 
@@ -388,14 +385,12 @@ class VideoAnalyzer:
     @staticmethod
     def calculate_ratio(video: Dict) -> float:
         """Calcule le ratio vues/abonnés"""
-        # ✅ FIX: Vérifier que video est un dict valide
         if not isinstance(video, dict):
             return 0.0
         
         subs = video.get('channel_follower_count') or 1
         views = video.get('view_count', 0)
         
-        # ✅ FIX: Vérifier les types et éviter division par zéro
         if not isinstance(subs, (int, float)) or not isinstance(views, (int, float)):
             return 0.0
         
@@ -407,7 +402,6 @@ class VideoAnalyzer:
     @staticmethod
     def sort_by_ratio(videos: List[Dict]) -> List[Dict]:
         """Trie par ratio décroissant"""
-        # ✅ FIX: Vérifier que videos est une liste valide
         if not videos or not isinstance(videos, list):
             return []
         
@@ -421,7 +415,6 @@ class VideoAnalyzer:
     @staticmethod
     def get_stars(ratio: float) -> str:
         """Génère les étoiles basées sur le ratio"""
-        # ✅ FIX: Vérifier que ratio est un nombre
         if not isinstance(ratio, (int, float)):
             return "⭐"
         
@@ -439,7 +432,6 @@ class PromptBuilder:
     @staticmethod
     def build(videos: List[Dict], keywords: List[str], urls_count: int, language: str) -> str:
         """Crée le prompt d'analyse"""
-        # ✅ FIX: Vérifier que tous les paramètres sont valides
         if not videos or not isinstance(videos, list):
             return "No videos to analyze."
         
@@ -469,7 +461,6 @@ class PromptBuilder:
             if not isinstance(video, dict):
                 continue
             
-            # ✅ FIX: Utiliser .get() avec default pour éviter KeyError
             title = video.get('title', 'Unknown Title')
             webpage_url = video.get('webpage_url', '')
             view_count = video.get('view_count', 0)
@@ -545,7 +536,6 @@ def render_sidebar() -> Tuple[List[str], List[str], str, int, str, str, Optional
                 f.write(cookies_uploaded.getbuffer())
             st.sidebar.success("✅ Cookies loaded")
         except Exception as e:
-            # ✅ FIX: Gestion d'erreur pour l'écriture de fichier
             logger.warning(f"Error saving cookies: {str(e)}")
             st.sidebar.error("❌ Error loading cookies file")
             cookies_path = None
@@ -586,7 +576,6 @@ def get_date_limit(date_period: str) -> Optional[datetime]:
 def render_results(videos: List[Dict], keywords: List[str], urls_count: int, language: str):
     """Affiche les résultats"""
     
-    # ✅ FIX: Vérifier que videos est une liste valide
     if not videos or not isinstance(videos, list):
         st.warning("❌ No videos found matching your criteria")
         return
@@ -679,7 +668,7 @@ def main():
         
         # Keywords
         for kw in keywords:
-            entries = processor.search_keyword(kw, max_results=20)  # ⚡ Réduit de 40 → 20
+            entries = processor.search_keyword(kw, max_results=100)  # ✅ FIXÉ: 20 → 100
             if entries and isinstance(entries, list):
                 for entry in entries:
                     if entry and isinstance(entry, dict):
@@ -699,9 +688,8 @@ def main():
         status_placeholder.info(f"⏳ Analyzing {len(videos_to_process)} videos...")
         progress_bar.progress(0.6)
         
-        # ✅ FIX: Vérifier que videos_to_process n'est pas vide avant division
         if videos_to_process:
-            with ThreadPoolExecutor(max_workers=40) as executor:  # ⚡ Augmenté de 15 → 40
+            with ThreadPoolExecutor(max_workers=50) as executor:  # ✅ FIXÉ: 40 → 50
                 futures = {
                     executor.submit(
                         processor.process_video,
@@ -721,11 +709,9 @@ def main():
                             result['keyword_source'] = entry.get('keyword_source', 'Unknown')
                             all_videos.append(result)
                     except Exception as e:
-                        # ✅ FIX: Gérer les exceptions de thread
                         logger.warning(f"Error in thread: {str(e)}")
                     
                     completed += 1
-                    # ✅ FIX: Éviter division par zéro
                     if len(videos_to_process) > 0:
                         progress_bar.progress(0.6 + (completed / len(videos_to_process)) * 0.35)
         
