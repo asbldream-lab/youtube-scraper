@@ -1,10 +1,9 @@
 """
-YouTube Research Tool - V12
-Fix majeur:
-- "ice trump" = AND (comme "ice + trump")
-- normalisation: "I.C.E" => "ice"
-- matching mot entier (évite ice dans justice)
-- on inclut aussi les tags (si présents)
+YouTube Research Tool - V13
+- Recherche identique à V12 (AND keywords, vues, durée, date, langue, scoring)
+- Commentaires: affichés uniquement dans une fenêtre à gauche (Ctrl+A),
+  avec la phrase d'intro demandée
+- Aucune section commentaires sous les vidéos
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from typing import Dict, List, Optional, Tuple, Set
 
 import streamlit as st
 
-st.set_page_config(page_title="YouTube Research (V12)", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="YouTube Research (V13)", layout="wide", initial_sidebar_state="expanded")
 
 DEADLINE_SECONDS = 10.0
 MAX_PAGES = 5
@@ -29,7 +28,11 @@ LANGUAGE_CONFIG = {
 }
 
 ISO_DURATION_RE = re.compile(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$")
-WORD_RE = re.compile(r"\b[a-z0-9]+\b", re.IGNORECASE)
+
+
+# =========================
+# GOOGLE API CLIENT
+# =========================
 
 @st.cache_resource(show_spinner=False)
 def yt_client():
@@ -51,6 +54,11 @@ def http_error_to_text(ex: Exception) -> str:
     except Exception:
         pass
     return str(ex)
+
+
+# =========================
+# UTILITAIRES
+# =========================
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -84,10 +92,10 @@ def normalize_text(s: str) -> str:
 
 def parse_and_tokens(query: str) -> List[str]:
     """
-    NOUVELLE règle:
-    - si tu écris "a + b" => tokens ["a", "b"]
-    - si tu écris "a b"   => tokens ["a", "b"]  (AND aussi)
-    - guillemets: "donald trump" => token phrase
+    Règle V12:
+    - "ice + trump" => AND
+    - "ice trump"   => AND aussi
+    - guillemets => phrase
     """
     if not query:
         return []
@@ -96,11 +104,9 @@ def parse_and_tokens(query: str) -> List[str]:
     quoted = re.findall(r'"([^"]+)"', q)
     q_wo_quotes = re.sub(r'"[^"]+"', " ", q)
 
-    # Si "+" est présent => split par +
     if "+" in q_wo_quotes:
         parts = [p.strip() for p in re.split(r"\s*\+\s*", q_wo_quotes) if p.strip()]
     else:
-        # Sinon, split par espaces => AND
         parts = [p.strip() for p in re.split(r"\s+", q_wo_quotes) if p.strip()]
 
     tokens = [*quoted, *parts]
@@ -114,15 +120,74 @@ def token_present(text: str, token: str) -> bool:
     if not tok:
         return True
 
-    # Phrase (avec espaces) => substring
-    if " " in tok:
+    if " " in tok:  # phrase
         return tok in t
 
-    # Mot entier => évite ice dans justice
+    # mot entier (évite ice dans justice)
     return re.search(rf"\b{re.escape(tok)}\b", t) is not None
 
 def tokens_all_present(text: str, tokens: List[str]) -> bool:
     return all(token_present(text, tok) for tok in tokens)
+
+def passes_duration(seconds: int, min_duration: str) -> bool:
+    if min_duration == "Toutes":
+        return True
+    if min_duration == "2 min":
+        return seconds >= 120
+    if min_duration == "5 min":
+        return seconds >= 300
+    if min_duration == "10 min":
+        return seconds >= 600
+    return True
+
+def language_proof_ok(
+    default_audio_language: Optional[str],
+    default_language: Optional[str],
+    target_code: Optional[str],
+    require_proof: bool
+) -> Tuple[bool, str]:
+    if target_code is None:
+        return True, "Langue: Auto (pas de filtre)"
+
+    dal = (default_audio_language or "").strip().lower()
+    dl = (default_language or "").strip().lower()
+
+    def matches(code: str) -> bool:
+        return code == target_code or code.startswith(target_code + "-")
+
+    if dal:
+        return (matches(dal), f"Audio={dal}" if matches(dal) else f"Audio={dal} (attendu {target_code})")
+    if dl:
+        return (matches(dl), f"Meta={dl}" if matches(dl) else f"Meta={dl} (attendu {target_code})")
+
+    if require_proof:
+        return False, "Aucune preuve langue (audio/meta absents)"
+    return True, "Aucune preuve langue (accepté)"
+
+def stars_from_ratio(ratio: Optional[float]) -> str:
+    if ratio is None:
+        return "⭐"
+    if ratio >= 5:
+        return "⭐⭐⭐🔥"
+    if ratio >= 2:
+        return "⭐⭐⭐"
+    if ratio >= 1:
+        return "⭐⭐"
+    return "⭐"
+
+def comments_box(comments: List[str]) -> str:
+    # ✅ TA PHRASE EXACTE
+    intro = (
+        " analyse moi ces commentaires et relève les points suivant : "
+        " les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire "
+        " et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !\n\n"
+    )
+    return intro + "\n\n".join(comments)
+
+
+# =========================
+# YOUTUBE API
+# =========================
 
 def api_search_video_ids(
     query: str,
@@ -251,7 +316,7 @@ def api_fetch_comments_20(video_id: str) -> List[str]:
             maxResults=20,
             order="relevance",
             textFormat="plainText",
-            fields="items(snippet(topLevelComment(snippet(textDisplay,likeCount))))"
+            fields="items(snippet(topLevelComment(snippet(textDisplay))))"
         )
         res = req.execute()
     except Exception:
@@ -265,54 +330,13 @@ def api_fetch_comments_20(video_id: str) -> List[str]:
             texts.append(txt)
     return texts
 
-def passes_duration(seconds: int, min_duration: str) -> bool:
-    if min_duration == "Toutes":
-        return True
-    if min_duration == "2 min":
-        return seconds >= 120
-    if min_duration == "5 min":
-        return seconds >= 300
-    if min_duration == "10 min":
-        return seconds >= 600
-    return True
 
-def language_proof_ok(
-    default_audio_language: Optional[str],
-    default_language: Optional[str],
-    target_code: Optional[str],
-    require_proof: bool
-) -> Tuple[bool, str]:
-    if target_code is None:
-        return True, "Langue: Auto (pas de filtre)"
-
-    dal = (default_audio_language or "").strip().lower()
-    dl = (default_language or "").strip().lower()
-
-    def matches(code: str) -> bool:
-        return code == target_code or code.startswith(target_code + "-")
-
-    if dal:
-        return (matches(dal), f"Audio={dal}" if matches(dal) else f"Audio={dal} (attendu {target_code})")
-    if dl:
-        return (matches(dl), f"Meta={dl}" if matches(dl) else f"Meta={dl} (attendu {target_code})")
-
-    if require_proof:
-        return False, "Aucune preuve langue (audio/meta absents)"
-    return True, "Aucune preuve langue (accepté)"
-
-def stars_from_ratio(ratio: Optional[float]) -> str:
-    if ratio is None:
-        return "⭐"
-    if ratio >= 5:
-        return "⭐⭐⭐🔥"
-    if ratio >= 2:
-        return "⭐⭐⭐"
-    if ratio >= 1:
-        return "⭐⭐"
-    return "⭐"
+# =========================
+# UI
+# =========================
 
 def render_sidebar() -> dict:
-    st.sidebar.title("🔍 YouTube Research (V12)")
+    st.sidebar.title("🔍 YouTube Research (V13)")
 
     st.sidebar.header("📝 Mots-clés")
     keywords_text = st.sidebar.text_area(
@@ -369,56 +393,19 @@ def render_sidebar() -> dict:
         "match_in": match_in,
     }
 
-def comments_box(comments: List[str]) -> str:
-    instruction = (
-        "analyse moi ces commentaires et relève les points suivant :\n"
-        "1) les idées qui reviennent le plus souvent\n"
-        "2) propose moi 3 sujets qui marcheront sur base des commentaires\n"
-        "3) propose moi 3 sujets périphériques qui pourraient marcher par rapport aux commentaires\n\n"
-    )
-    return instruction + "\n\n".join([f"- {c}" for c in comments])
-
-def render_video_card(v: dict, idx: int):
-    header = f"#{idx} {v['stars']} | {v['views']:,} vues"
-    if isinstance(v.get("ratio"), (int, float)):
-        header += f" | {v['ratio']:.2f}x"
-
-    with st.expander(header, expanded=(idx <= 3)):
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            if v.get("thumbnail"):
-                st.image(v["thumbnail"], use_container_width=True)
-        with c2:
-            st.markdown(f"**{v['title']}**")
-            st.write(f"📺 {v['channel_title']}")
-            st.write(f"🗣️ {v['lang_reason']}")
-            st.write(f"🔎 Match: {v['matched_kw']}")
-            st.write(f"👁️ {v['views']:,} vues")
-
-            subs = v.get("subs")
-            st.write(f"👥 abonnés: {subs:,}" if isinstance(subs, int) else "👥 abonnés: N/A")
-            if isinstance(v.get("ratio"), (int, float)):
-                st.write(f"📊 Ratio vues/abonnés: **{v['ratio']:.2f}x**")
-
-            st.link_button("▶️ YouTube", v["url"])
-
-        st.divider()
-        if st.button("💬 Charger 20 commentaires", key=f"load_{v['video_id']}", use_container_width=True):
-            st.session_state.comments_cache[v["video_id"]] = api_fetch_comments_20(v["video_id"])
-
-        comments = st.session_state.comments_cache.get(v["video_id"], [])
-        if comments:
-            st.subheader("📋 Commentaires (Ctrl+A)")
-            st.text_area("Copie-colle", value=comments_box(comments), height=280)
 
 def main():
-    st.title("🚀 YouTube Research (V12)")
-    st.caption("Fix AND + scoring + commentaires à la demande")
+    st.title("🚀 YouTube Research (V13)")
+    st.caption("Recherche + scoring. Commentaires dans la fenêtre à gauche (Ctrl+A).")
 
     params = render_sidebar()
 
     if "comments_cache" not in st.session_state:
         st.session_state.comments_cache = {}
+    if "selected_video" not in st.session_state:
+        st.session_state.selected_video = None
+    if "selected_title" not in st.session_state:
+        st.session_state.selected_title = ""
 
     if not st.sidebar.button("🚀 LANCER", type="primary", use_container_width=True):
         st.info("Écris une requête (ex: ICE trump) puis clique LANCER.")
@@ -458,7 +445,7 @@ def main():
     all_ids: List[str] = []
 
     for i, kw in enumerate(params["keywords"]):
-        status.write(f"🔍 Recherche: {kw} | tokens={kw_tokens.get(kw)}")
+        status.write(f"🔍 Recherche: {kw}")
         ids = api_search_video_ids(
             query=kw,
             pages=params["pages"],
@@ -623,13 +610,72 @@ def main():
     d5.metric("Rejet langue", stats["filtered_language"])
 
     st.divider()
-    st.subheader("📹 Vidéos")
-    for idx, v in enumerate(display, 1):
-        render_video_card(v, idx)
+
+    # ✅ LAYOUT FINAL: gauche commentaires / droite vidéos
+    left, right = st.columns([1, 2])
+
+    with left:
+        st.subheader("📝 Commentaires (Ctrl+A)")
+
+        if st.session_state.selected_video:
+            vid = st.session_state.selected_video
+            st.caption(f"Vidéo sélectionnée : {st.session_state.selected_title}")
+
+            # charge si pas en cache
+            if vid not in st.session_state.comments_cache:
+                st.session_state.comments_cache[vid] = api_fetch_comments_20(vid)
+
+            comments = st.session_state.comments_cache.get(vid, [])
+            st.text_area(
+                "Copie-colle",
+                value=comments_box(comments) if comments else "Aucun commentaire trouvé.",
+                height=520
+            )
+        else:
+            st.text_area(
+                "Copie-colle",
+                value="Clique sur une vidéo à droite (bouton 💬) pour charger 20 commentaires ici.",
+                height=520
+            )
+
+    with right:
+        st.subheader("📹 Vidéos")
+        for idx, v in enumerate(display, 1):
+            # ligne compacte + bouton sélection commentaires
+            cols = st.columns([1, 9])
+            with cols[0]:
+                if st.button("💬", key=f"pick_{v['video_id']}"):
+                    st.session_state.selected_video = v["video_id"]
+                    st.session_state.selected_title = v["title"]
+
+            with cols[1]:
+                header = f"#{idx} {v['stars']} | {v['views']:,} vues"
+                if isinstance(v.get("ratio"), (int, float)):
+                    header += f" | {v['ratio']:.2f}x"
+
+                with st.expander(header, expanded=(idx <= 3)):
+                    c1, c2 = st.columns([1, 2])
+                    with c1:
+                        if v.get("thumbnail"):
+                            st.image(v["thumbnail"], use_container_width=True)
+                    with c2:
+                        st.markdown(f"**{v['title']}**")
+                        st.write(f"📺 {v['channel_title']}")
+                        st.write(f"🗣️ {v['lang_reason']}")
+                        st.write(f"🔎 Match: {v['matched_kw']}")
+                        st.write(f"👁️ {v['views']:,} vues")
+
+                        subs = v.get("subs")
+                        st.write(f"👥 abonnés: {subs:,}" if isinstance(subs, int) else "👥 abonnés: N/A")
+                        if isinstance(v.get("ratio"), (int, float)):
+                            st.write(f"📊 Ratio vues/abonnés: **{v['ratio']:.2f}x**")
+
+                        st.link_button("▶️ YouTube", v["url"])
 
     st.divider()
     st.subheader("📜 Logs (dernier 200)")
     st.text_area("", value="\n".join(logs[-200:]), height=240)
+
 
 if __name__ == "__main__":
     main()
