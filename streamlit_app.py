@@ -1,9 +1,8 @@
 """
-YouTube Research Tool - V13
-- Recherche identique à V12 (AND keywords, vues, durée, date, langue, scoring)
-- Commentaires: affichés uniquement dans une fenêtre à gauche (Ctrl+A),
-  avec la phrase d'intro demandée
-- Aucune section commentaires sous les vidéos
+YouTube Research Tool - V15
+- Recherche identique à V12/V13 (AND keywords, vues, durée, date, langue, scoring)
+- À gauche : 1 fenêtre "Ctrl+A" contenant: PROMPT + 20 TOP COMMENTS par vidéo
+- Top comments = commentThreads.list(order="relevance") et on prend les 20 premiers
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from typing import Dict, List, Optional, Tuple, Set
 
 import streamlit as st
 
-st.set_page_config(page_title="YouTube Research (V13)", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="YouTube Research (V15)", layout="wide", initial_sidebar_state="expanded")
 
 DEADLINE_SECONDS = 10.0
 MAX_PAGES = 5
@@ -29,6 +28,12 @@ LANGUAGE_CONFIG = {
 
 ISO_DURATION_RE = re.compile(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$")
 
+# ✅ Ton prompt EXACT (je garde tel quel)
+PROMPT_INTRO = (
+    "analyse moi ces commentaires et relève les points suivant : "
+    "les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire "
+    "et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !"
+)
 
 # =========================
 # GOOGLE API CLIENT
@@ -54,7 +59,6 @@ def http_error_to_text(ex: Exception) -> str:
     except Exception:
         pass
     return str(ex)
-
 
 # =========================
 # UTILITAIRES
@@ -86,13 +90,12 @@ def parse_iso8601_duration_to_seconds(d: str) -> int:
 
 def normalize_text(s: str) -> str:
     s = (s or "").lower()
-    s = s.replace(".", "")          # I.C.E -> ice
+    s = s.replace(".", "")  # I.C.E -> ice
     s = re.sub(r"\s+", " ", s)
     return s.strip()
 
 def parse_and_tokens(query: str) -> List[str]:
     """
-    Règle V12:
     - "ice + trump" => AND
     - "ice trump"   => AND aussi
     - guillemets => phrase
@@ -123,7 +126,7 @@ def token_present(text: str, token: str) -> bool:
     if " " in tok:  # phrase
         return tok in t
 
-    # mot entier (évite ice dans justice)
+    # mot entier
     return re.search(rf"\b{re.escape(tok)}\b", t) is not None
 
 def tokens_all_present(text: str, tokens: List[str]) -> bool:
@@ -175,15 +178,29 @@ def stars_from_ratio(ratio: Optional[float]) -> str:
         return "⭐⭐"
     return "⭐"
 
-def comments_box(comments: List[str]) -> str:
-    # ✅ TA PHRASE EXACTE
-    intro = (
-        " analyse moi ces commentaires et relève les points suivant : "
-        " les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire "
-        " et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !\n\n"
-    )
-    return intro + "\n\n".join(comments)
-
+def build_left_text(videos: List[dict], comments_by_video: Dict[str, List[str]]) -> str:
+    """
+    Construit le texte final:
+    Pour chaque vidéo:
+    - titre + lien
+    - prompt
+    - 20 top comments
+    """
+    out: List[str] = []
+    for idx, v in enumerate(videos, 1):
+        vid = v["video_id"]
+        comments = comments_by_video.get(vid, [])
+        out.append(f"==================== VIDEO {idx} ====================\n")
+        out.append(f"TITRE: {v['title']}\n")
+        out.append(f"LIEN:  {v['url']}\n\n")
+        out.append(PROMPT_INTRO + "\n\n")
+        out.append("COMMENTAIRES:\n")
+        if comments:
+            out.extend([f"- {c}" for c in comments])
+        else:
+            out.append("- (aucun commentaire récupéré)")
+        out.append("\n\n")
+    return "".join(out).strip()
 
 # =========================
 # YOUTUBE API
@@ -307,7 +324,10 @@ def api_channels_list(channel_ids: List[str], deadline_t: float, logs: List[str]
     return out
 
 @st.cache_data(show_spinner=False, ttl=3600)
-def api_fetch_comments_20(video_id: str) -> List[str]:
+def api_fetch_top_comments_20(video_id: str) -> List[str]:
+    """
+    Top comments = order="relevance", 20 premiers
+    """
     yt = yt_client()
     try:
         req = yt.commentThreads().list(
@@ -330,13 +350,12 @@ def api_fetch_comments_20(video_id: str) -> List[str]:
             texts.append(txt)
     return texts
 
-
 # =========================
 # UI
 # =========================
 
 def render_sidebar() -> dict:
-    st.sidebar.title("🔍 YouTube Research (V13)")
+    st.sidebar.title("🔍 YouTube Research (V15)")
 
     st.sidebar.header("📝 Mots-clés")
     keywords_text = st.sidebar.text_area(
@@ -373,7 +392,7 @@ def render_sidebar() -> dict:
     st.sidebar.divider()
     st.sidebar.header("⚡ Vitesse")
     hard_deadline = st.sidebar.checkbox("⏱️ Couper si > 10s", value=True)
-    max_display = st.sidebar.slider("Max vidéos affichées", 5, 50, 20)
+    max_display = st.sidebar.slider("Max vidéos affichées", 5, 30, 10)
 
     st.sidebar.divider()
     st.sidebar.header("🔎 Matching")
@@ -393,19 +412,35 @@ def render_sidebar() -> dict:
         "match_in": match_in,
     }
 
+def render_video_card(v: dict, idx: int):
+    header = f"#{idx} {v['stars']} | {v['views']:,} vues"
+    if isinstance(v.get("ratio"), (int, float)):
+        header += f" | {v['ratio']:.2f}x"
+
+    with st.expander(header, expanded=(idx <= 3)):
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            if v.get("thumbnail"):
+                st.image(v["thumbnail"], use_container_width=True)
+        with c2:
+            st.markdown(f"**{v['title']}**")
+            st.write(f"📺 {v['channel_title']}")
+            st.write(f"🗣️ {v['lang_reason']}")
+            st.write(f"🔎 Match: {v['matched_kw']}")
+            st.write(f"👁️ {v['views']:,} vues")
+
+            subs = v.get("subs")
+            st.write(f"👥 abonnés: {subs:,}" if isinstance(subs, int) else "👥 abonnés: N/A")
+            if isinstance(v.get("ratio"), (int, float)):
+                st.write(f"📊 Ratio vues/abonnés: **{v['ratio']:.2f}x**")
+
+            st.link_button("▶️ YouTube", v["url"])
 
 def main():
-    st.title("🚀 YouTube Research (V13)")
-    st.caption("Recherche + scoring. Commentaires dans la fenêtre à gauche (Ctrl+A).")
+    st.title("🚀 YouTube Research (V15)")
+    st.caption("À gauche: PROMPT + 20 TOP commentaires par vidéo (Ctrl+A). À droite: vidéos.")
 
     params = render_sidebar()
-
-    if "comments_cache" not in st.session_state:
-        st.session_state.comments_cache = {}
-    if "selected_video" not in st.session_state:
-        st.session_state.selected_video = None
-    if "selected_title" not in st.session_state:
-        st.session_state.selected_title = ""
 
     if not st.sidebar.button("🚀 LANCER", type="primary", use_container_width=True):
         st.info("Écris une requête (ex: ICE trump) puis clique LANCER.")
@@ -424,6 +459,8 @@ def main():
         "filtered_date": 0,
         "filtered_language": 0,
         "passed_total": 0,
+        "comments_loaded": 0,
+        "comments_skipped_deadline": 0,
     }
 
     if not params["keywords"]:
@@ -507,10 +544,7 @@ def main():
         desc = sn.get("description", "") or ""
         tags = sn.get("tags") or []
 
-        if params["match_in"] == "Titre seulement":
-            combined = title
-        else:
-            combined = f"{title}\n{desc}\n{' '.join(tags)}"
+        combined = title if params["match_in"] == "Titre seulement" else f"{title}\n{desc}\n{' '.join(tags)}"
 
         matched_kw = None
         for kw in video_sources.get(vid, []):
@@ -591,6 +625,22 @@ def main():
     stats["passed_total"] = len(results)
     display = results[: params["max_display"]]
 
+    progress.progress(0.8)
+    status.update(label=f"💬 Récupération des TOP commentaires (20) par vidéo...", state="running")
+
+    # ✅ Charge DIRECTEMENT les 20 top comments pour chaque vidéo affichée
+    comments_by_video: Dict[str, List[str]] = {}
+    for v in display:
+        if time.monotonic() > deadline_t:
+            comments_by_video[v["video_id"]] = ["(Commentaires non chargés: limite 10s atteinte)"]
+            stats["comments_skipped_deadline"] += 1
+            continue
+
+        comments_by_video[v["video_id"]] = api_fetch_top_comments_20(v["video_id"])
+        stats["comments_loaded"] += 1
+
+    left_text = build_left_text(display, comments_by_video)
+
     progress.progress(1.0)
     status.update(label=f"✅ {len(display)} vidéos affichées (validées total: {stats['passed_total']})", state="complete")
 
@@ -598,7 +648,7 @@ def main():
     c1.metric("IDs trouvés", stats["ids_found"])
     c2.metric("Meta vidéos", stats["videos_meta"])
     c3.metric("Validées (total)", stats["passed_total"])
-    c4.metric("Rejet langue", stats["filtered_language"])
+    c4.metric("Commentaires chargés", stats["comments_loaded"])
 
     st.divider()
     st.subheader("🔎 Diagnostic rapide")
@@ -611,66 +661,18 @@ def main():
 
     st.divider()
 
-    # ✅ LAYOUT FINAL: gauche commentaires / droite vidéos
+    # ✅ Layout final demandé
     left, right = st.columns([1, 2])
 
     with left:
-        st.subheader("📝 Commentaires (Ctrl+A)")
-
-        if st.session_state.selected_video:
-            vid = st.session_state.selected_video
-            st.caption(f"Vidéo sélectionnée : {st.session_state.selected_title}")
-
-            # charge si pas en cache
-            if vid not in st.session_state.comments_cache:
-                st.session_state.comments_cache[vid] = api_fetch_comments_20(vid)
-
-            comments = st.session_state.comments_cache.get(vid, [])
-            st.text_area(
-                "Copie-colle",
-                value=comments_box(comments) if comments else "Aucun commentaire trouvé.",
-                height=520
-            )
-        else:
-            st.text_area(
-                "Copie-colle",
-                value="Clique sur une vidéo à droite (bouton 💬) pour charger 20 commentaires ici.",
-                height=520
-            )
+        st.subheader("📝 PROMPT + Commentaires (Ctrl+A)")
+        st.text_area("Copie-colle", value=left_text, height=650)
+        st.download_button("📥 Télécharger (prompt_commentaires.txt)", data=left_text, file_name="prompt_commentaires.txt")
 
     with right:
         st.subheader("📹 Vidéos")
         for idx, v in enumerate(display, 1):
-            # ligne compacte + bouton sélection commentaires
-            cols = st.columns([1, 9])
-            with cols[0]:
-                if st.button("💬", key=f"pick_{v['video_id']}"):
-                    st.session_state.selected_video = v["video_id"]
-                    st.session_state.selected_title = v["title"]
-
-            with cols[1]:
-                header = f"#{idx} {v['stars']} | {v['views']:,} vues"
-                if isinstance(v.get("ratio"), (int, float)):
-                    header += f" | {v['ratio']:.2f}x"
-
-                with st.expander(header, expanded=(idx <= 3)):
-                    c1, c2 = st.columns([1, 2])
-                    with c1:
-                        if v.get("thumbnail"):
-                            st.image(v["thumbnail"], use_container_width=True)
-                    with c2:
-                        st.markdown(f"**{v['title']}**")
-                        st.write(f"📺 {v['channel_title']}")
-                        st.write(f"🗣️ {v['lang_reason']}")
-                        st.write(f"🔎 Match: {v['matched_kw']}")
-                        st.write(f"👁️ {v['views']:,} vues")
-
-                        subs = v.get("subs")
-                        st.write(f"👥 abonnés: {subs:,}" if isinstance(subs, int) else "👥 abonnés: N/A")
-                        if isinstance(v.get("ratio"), (int, float)):
-                            st.write(f"📊 Ratio vues/abonnés: **{v['ratio']:.2f}x**")
-
-                        st.link_button("▶️ YouTube", v["url"])
+            render_video_card(v, idx)
 
     st.divider()
     st.subheader("📜 Logs (dernier 200)")
