@@ -1,48 +1,62 @@
 import streamlit as st
 from yt_dlp import YoutubeDL
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from langdetect import detect, DetectorFactory
+from langdetect import detect, DetectorFactory, LangDetectException
 import time
 
-# --- SÉCURITÉ ---
+# --- CONFIGURATION ---
 DetectorFactory.seed = 0
-st.set_page_config(page_title="YT Sniper Final", layout="wide")
+st.set_page_config(page_title="YT Sniper Speed", layout="wide")
 
-# --- MOTEUR DE DÉTECTION ---
+# --- FONCTIONS ---
+
+def quick_title_check(title, target_code):
+    """
+    FILTRE ÉCLAIR (0.01s)
+    Analyse le titre AVANT de lancer le téléchargement lourd.
+    Si le titre est visiblement dans la mauvaise langue, on annule tout.
+    """
+    if not title or len(title) < 5: return False
+    try:
+        # Si on cherche du FR et que le titre est détecté EN -> POUBELLE
+        detected = detect(title)
+        if detected != target_code:
+            # Petite sécurité : si le titre est court, l'IA peut se tromper, donc on garde
+            if len(title.split()) > 4: 
+                return False
+        return True
+    except:
+        return True # Dans le doute, on garde
+
 def check_comments_reading(comments, target_code):
-    """L'Algo lit jusqu'à 8 commentaires pour valider la langue"""
+    """Validation finale par lecture des commentaires"""
     if not target_code or not comments: return True
+    readable = [c.get('text', '') for c in comments if len(c.get('text', '') or '') > 5]
+    if not readable: return False 
     
-    # On garde seulement les vraies phrases (> 5 lettres)
-    readable_comments = [c.get('text', '') for c in comments if len(c.get('text', '') or '') > 5]
-    
-    if not readable_comments: 
-        return False # Pas de coms lisibles, on rejette par sécurité (qualité)
-
     hits = 0
-    for text in readable_comments[:8]:
+    for text in readable[:5]: # On ne lit que les 5 premiers
         try:
             if detect(text) == target_code: hits += 1
         except: continue
-    
-    # Si au moins 1 commentaire est dans la bonne langue, c'est validé
     return hits >= 1
 
 def fetch_deep_data(url):
-    """Extraction rapide avec commentaires"""
+    """Téléchargement des commentaires (Lourd -> Uniquement sur les élus)"""
     opts = {
         'quiet': True, 'skip_download': True, 'getcomments': True, 
-        'max_comments': 8, 'socket_timeout': 4, # Timeout court pour la vitesse
+        'max_comments': 5, # On réduit à 5 pour la vitesse max
+        'socket_timeout': 3, # Timeout agressif
         'ignoreerrors': True, 'no_warnings': True
     }
     with YoutubeDL(opts) as ydl:
         return ydl.extract_info(url, download=False)
 
-def fast_search(query, limit):
-    """Recherche simple"""
+def search_flat(query, limit):
+    """Recherche 'Flat' (Métadonnées seules -> Instantané)"""
     opts = {
         'quiet': True, 'extract_flat': True, 'ignoreerrors': True,
-        'geo_bypass_country': 'FR' # On force la France pour aider le ranking
+        'geo_bypass_country': 'FR' # Force la localisation
     }
     with YoutubeDL(opts) as ydl:
         try:
@@ -51,73 +65,67 @@ def fast_search(query, limit):
         except: return []
 
 # --- INTERFACE ---
-st.title("🚀 YT Sniper : Ghost Search Protocol")
-st.caption("Stratégie : Multi-Recherche Invisible (Smart Querying)")
+st.title("🚀 YT Sniper : Speed Demon (Max 10s)")
 
 with st.sidebar:
     kws = st.text_area("Mots-clés", "ICE Trump").split('\n')
-    # Sélecteur simple pour piloter les recherches fantômes
-    lang_code = st.selectbox("Langue recherchée", ["fr", "en", "es"])
+    lang_code = st.selectbox("Langue cible", ["fr", "en", "es"])
     min_v = st.number_input("Vues Min", value=50000)
-    go = st.button("LANCER (MAX 10s)", type="primary")
+    go = st.button("LANCER", type="primary")
 
 if go:
     st.session_state.logs = []
     start_time = time.time()
-    
     barre = st.progress(0)
     status = st.empty()
     
-    # --- PHASE 1 : LA RECHERCHE FANTÔME (Multi-Query) ---
-    # C'est la clé : L'algo génère des variations pour toi sans que tu tapes rien de plus.
-    candidates_pool = []
-    queries_to_run = []
-    
+    # 1. RECHERCHE CIBLÉE (Ghost Search)
+    # On utilise "lang:fr" pour forcer YouTube à faire le tri à la source
+    search_queries = []
     for kw in [k.strip() for k in kws if k.strip()]:
-        # 1. La recherche pure (ce que tu as tapé) -> Trouve CNN, Fox
-        queries_to_run.append(kw)
-        
-        # 2. La recherche guidée (invisible) -> Trouve ARTE, France 24
-        if lang_code == "fr":
-            queries_to_run.append(f"{kw} lang:fr") 
-        elif lang_code == "en":
-            queries_to_run.append(f"{kw} lang:en")
-        elif lang_code == "es":
-            queries_to_run.append(f"{kw} lang:es")
-            
-    status.write(f"🕵️ Lancement de {len(queries_to_run)} recherches parallèles (Auto-Correction)...")
+        search_queries.append(f"{kw} lang:{lang_code}") 
+
+    status.write(f"⚡ Scan rapide de {len(search_queries)} requêtes...")
     
+    candidates = []
     with ThreadPoolExecutor(max_workers=5) as executor:
-        # On scanne 20 résultats par variation. C'est suffisant car "lang:fr" est très précis.
-        futures = {executor.submit(fast_search, q, 20): q for q in queries_to_run}
-        
+        futures = [executor.submit(search_flat, q, 20) for q in search_queries]
         for f in as_completed(futures):
             res = f.result()
-            if res: candidates_pool.extend(res)
+            if res: candidates.extend(res)
 
-    # Dédoublonnage instantané
-    unique_candidates = {v['id']: v for v in candidates_pool if v}.values()
-    
-    # --- PHASE 2 : LE TRI SÉLECTIF ---
+    # 2. PRÉ-FILTRAGE CPU (INSTANTANÉ)
+    # C'est ici qu'on gagne les 140 secondes.
+    # On élimine tout ce qui a un titre anglais ou peu de vues SANS réseau.
     survivors = []
-    for vid in unique_candidates:
-        views = vid.get('view_count', 0) or 0
-        if views >= min_v:
-            survivors.append(vid)
-            
-    status.write(f"⚡ {len(survivors)} vidéos potentielles identifiées. Lecture des commentaires...")
-    barre.progress(30)
-
-    # --- PHASE 3 : VALIDATION PAR LECTURE (Deep Scan) ---
-    final_results = []
+    unique_ids = set()
     
-    if survivors:
-        # On limite aux 15 meilleures pour la vitesse.
-        # Grâce à la recherche fantôme, ARTE est forcément dans ce TOP 15.
-        to_check = sorted(survivors, key=lambda x: x.get('view_count', 0), reverse=True)[:15]
+    for vid in candidates:
+        if not vid or vid['id'] in unique_ids: continue
+        unique_ids.add(vid['id'])
         
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(fetch_deep_data, v['url']): v for v in to_check}
+        # Filtre Vues
+        if vid.get('view_count', 0) < min_v: continue
+        
+        # Filtre Titre (Le Secret de la Vitesse)
+        # Si le titre est anglais, on ne perd pas 5s à télécharger les commentaires
+        if not quick_title_check(vid.get('title'), lang_code):
+            continue
+            
+        survivors.append(vid)
+
+    status.write(f"🔍 {len(survivors)} candidats qualifiés. Vérification finale...")
+    barre.progress(40)
+
+    # 3. VALIDATION PROFONDE (LIMITÉE AUX MEILLEURS)
+    final_results = []
+    if survivors:
+        # On ne lance le téléchargement lourd QUE sur les 5 meilleures vidéos (par vues)
+        # Inutile de vérifier la 20ème vidéo si on veut aller vite.
+        top_candidates = sorted(survivors, key=lambda x: x.get('view_count', 0), reverse=True)[:5]
+        
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(fetch_deep_data, v['url']): v for v in top_candidates}
             
             done = 0
             for f in as_completed(futures):
@@ -125,34 +133,32 @@ if go:
                 try:
                     data = f.result()
                     if data:
-                        # LE JUGEMENT ULTIME : LECTURE DES COMMENTAIRES
+                        # Validation par commentaires
                         if check_comments_reading(data.get('comments'), lang_code):
                             subs = data.get('channel_follower_count') or 1
                             data['_ratio'] = data.get('view_count', 0) / subs
                             final_results.append(data)
                 except: pass
-                
-                barre.progress(30 + int((done/len(to_check))*70))
+                barre.progress(40 + int((done/len(top_candidates))*60))
 
-    # --- RÉSULTATS ---
+    # --- AFFICHAGE ---
     barre.progress(100)
+    elapsed = time.time() - start_time
+    
+    if elapsed < 15:
+        status.success(f"Terminé en {elapsed:.1f} secondes ! ⚡")
+    else:
+        status.warning(f"Terminé en {elapsed:.1f} secondes.")
+
     final_results = sorted(final_results, key=lambda x: x.get('_ratio', 0), reverse=True)
     
-    duration = time.time() - start_time
-    status.success(f"Terminé en {duration:.1f} secondes.")
-
     if not final_results:
-        st.error("Aucune vidéo trouvée. Essaie de baisser le nombre de vues minimum.")
+        st.error("Aucune vidéo trouvée (Filtres trop stricts ou blocage YouTube).")
     
     for vid in final_results:
         with st.container(border=True):
             c1, c2 = st.columns([1, 4])
             c1.image(vid.get('thumbnail'))
             c2.subheader(f"{vid.get('_ratio', 0):.1f}x | {vid.get('title')}")
-            c2.write(f"👁️ {vid.get('view_count'):,} vues | 💬 Langue confirmée par commentaires")
+            c2.write(f"👁️ {vid.get('view_count'):,} vues | 💬 Langue vérifiée")
             c2.link_button("Voir la vidéo", vid.get('webpage_url'))
-            
-            with st.expander("Voir les commentaires analysés"):
-                coms = vid.get('comments', [])[:3]
-                for c in coms:
-                    st.caption(f"- {c.get('text')[:100]}...")
