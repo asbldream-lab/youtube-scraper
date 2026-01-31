@@ -2,123 +2,138 @@ import streamlit as st
 from yt_dlp import YoutubeDL
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langdetect import detect, DetectorFactory
-import os
 
-# Sécurité pour la détection de langue
+# Fixer le seed pour des résultats de détection constants
 DetectorFactory.seed = 0
 
-# --- CONFIG ---
-LANGUAGE_MAP = {
-    "Auto": {"hl": "en", "code": None},
-    "Français": {"hl": "fr", "code": "fr"},
-    "English": {"hl": "en", "code": "en"},
-    "Spanish": {"hl": "es", "code": "es"}
+# --- CONFIGURATION INTERFACE ---
+st.set_page_config(page_title="YouTube Sniper V13", layout="wide")
+
+LANG_MAP = {
+    "Auto": None,
+    "Français": "fr",
+    "English": "en",
+    "Spanish": "es"
 }
 
-def is_right_lang(text, target_code):
-    if not target_code or not text or len(text) < 12: return True
-    try:
-        return detect(text) == target_code
-    except:
+# --- FONCTIONS ALGORITHMIQUES ---
+
+def check_audience_lang(comments, target_code):
+    """Analyse les commentaires pour confirmer la langue de l'audience"""
+    if not target_code or not comments:
         return True
+    
+    hits = 0
+    # On extrait le texte des commentaires valides
+    sample = [c.get('text') for c in comments if c.get('text') and len(c.get('text')) > 5][:10]
+    
+    if not sample:
+        return False
 
-# --- LOGIQUE ---
-def get_fast_info(keyword, max_results, lang_name):
-    config = LANGUAGE_MAP.get(lang_name, LANGUAGE_MAP["Auto"])
-    # On injecte la langue dans le mot-clé pour aider YouTube
-    search_keyword = f"{keyword} lang:{config['code']}" if config['code'] else keyword
-    
-    opts = {
-        'quiet': True,
-        'extract_flat': True,
-        'socket_timeout': 7,
-        'http_headers': {'Accept-Language': config["hl"]}
-    }
-    
-    with YoutubeDL(opts) as ydl:
+    for text in sample:
         try:
-            res = ydl.extract_info(f"ytsearch{max_results}:{search_keyword}", download=False)
-            entries = res.get('entries', [])
-            # FIX: On s'assure que chaque entrée a une URL complète pour la suite
-            for e in entries:
-                if 'url' not in e:
-                    e['url'] = f"https://www.youtube.com/watch?v={e['id']}"
-            return entries
-        except Exception as e:
-            st.error(f"Erreur de recherche: {e}")
-            return []
+            if detect(text) == target_code:
+                hits += 1
+        except:
+            continue
+    
+    # Seuil de validation : 30% des commentaires dans la langue cible
+    return hits >= (len(sample) * 0.3)
 
-def get_full_details(video_url):
+def get_deep_info(url):
+    """Récupère les métadonnées et les commentaires d'une vidéo spécifique"""
     opts = {
         'quiet': True,
         'skip_download': True,
         'getcomments': True,
-        'max_comments': 15, # On prend un peu plus de commentaires
+        'max_comments': 10,
         'socket_timeout': 10,
-        'ignoreerrors': True
+        'ignoreerrors': True,
+        'no_warnings': True
     }
     with YoutubeDL(opts) as ydl:
-        return ydl.extract_info(video_url, download=False)
+        return ydl.extract_info(url, download=False)
 
-# --- APP ---
-st.title("🚀 YouTube Viral Sniper V9 (Fixed)")
+# --- APPLICATION PRINCIPALE ---
+
+st.title("🚀 YouTube Sniper V13")
+st.markdown("---")
 
 with st.sidebar:
-    kw_input = st.text_area("Mots-clés (1 par ligne)", "immigration ICE")
-    lang = st.selectbox("Langue cible", list(LANGUAGE_MAP.keys()))
-    min_v = st.number_input("Vues Min", value=10000)
-    limit = st.slider("Vidéos/Mot-clé", 5, 50, 15)
-    threads = st.slider("Threads (Vitesse)", 1, 15, 8)
-    go = st.button("LANCER", type="primary", use_container_width=True)
+    st.header("⚙️ Configuration")
+    kw_input = st.text_area("Mots-clés (un par ligne)", "ICE immigration\nTrump immigration")
+    target_lang = st.selectbox("Langue de l'audience", list(LANG_MAP.keys()))
+    min_views = st.number_input("Vues minimum", value=50000, step=10000)
+    search_limit = st.slider("Vidéos à scanner par mot-clé", 5, 50, 15)
+    threads = st.slider("Puissance de calcul (Threads)", 1, 20, 10)
+    
+    st.divider()
+    run_btn = st.button("LANCER L'ANALYSE", type="primary", use_container_width=True)
 
-if go:
+if run_btn:
     keywords = [k.strip() for k in kw_input.split('\n') if k.strip()]
-    all_candidates = []
-    
-    with st.status("Recherche et filtrage...", expanded=True) as status:
-        # Phase 1: Scan rapide
-        for kw in keywords:
-            status.write(f"🔍 Scan: {kw}")
-            raw_list = get_fast_info(kw, limit, lang)
-            target_code = LANGUAGE_MAP[lang]["code"]
+    target_code = LANG_MAP[target_lang]
+    final_results = []
+
+    if not keywords:
+        st.error("Veuillez entrer au moins un mot-clé.")
+    else:
+        with st.status("Chasse aux pépites en cours...", expanded=True) as status:
+            # ÉTAPE 1 : Collecte rapide des URLs
+            video_urls = []
+            search_opts = {'quiet': True, 'extract_flat': True}
             
-            for entry in raw_list:
-                # Filtre Langue + Vues (si dispos dans le scan rapide)
-                if is_right_lang(entry.get('title', ''), target_code):
-                    views = entry.get('view_count') or 0
-                    if views >= min_v or views == 0: # 0 car parfois non dispo en scan plat
-                        all_candidates.append(entry)
-        
-        status.write(f"🎯 {len(all_candidates)} vidéos à analyser profondément...")
-        
-        # Phase 2: Deep Dive (Parallel)
-        final_data = []
-        with ThreadPoolExecutor(max_workers=threads) as executor:
-            # On se limite aux 25 meilleures premières pour la vitesse
-            futures = {executor.submit(get_full_details, v['url']): v for v in all_candidates[:25]}
-            for f in as_completed(futures):
-                res = f.result()
-                if res and res.get('channel_follower_count'):
-                    subs = res['channel_follower_count']
-                    views = res.get('view_count', 0)
-                    res['_ratio'] = views / subs if subs > 0 else 0
-                    # Filtre final sur les vues réelles obtenues
-                    if views >= min_v:
-                        final_data.append(res)
+            with YoutubeDL(search_opts) as ydl:
+                for kw in keywords:
+                    status.write(f"🔎 Recherche : {kw}")
+                    try:
+                        search_res = ydl.extract_info(f"ytsearch{search_limit}:{kw}", download=False)
+                        if 'entries' in search_res:
+                            video_urls.extend([f"https://www.youtube.com/watch?v={e['id']}" for e in search_res['entries'] if e])
+                    except:
+                        continue
+            
+            # Nettoyage des doublons
+            video_urls = list(set(video_urls))
+            status.write(f"🧠 Analyse profonde de {len(video_urls)} vidéos...")
 
-        final_data = sorted(final_data, key=lambda x: x.get('_ratio', 0), reverse=True)
+            # ÉTAPE 2 : Analyse multi-threadée (Commentaires + Ratio)
+            with ThreadPoolExecutor(max_workers=threads) as executor:
+                futures = [executor.submit(get_deep_info, url) for url in video_urls]
+                
+                for f in as_completed(futures):
+                    v = f.result()
+                    if v and v.get('view_count', 0) >= min_views:
+                        # On valide la langue via les commentaires
+                        if check_audience_lang(v.get('comments'), target_code):
+                            # Calcul du ratio de viralité
+                            subs = v.get('channel_follower_count') or 1
+                            v['_ratio'] = v['view_count'] / subs
+                            final_results.append(v)
 
-    # --- RÉSULTATS ---
-    if not final_data:
-        st.warning("Aucune vidéo n'a passé les filtres. Baisse le nombre de vues min.")
-    
-    for vid in final_data:
-        with st.container(border=True):
-            c1, c2 = st.columns([1, 2])
-            c1.image(vid.get('thumbnail'))
-            c2.subheader(f"{vid.get('_ratio', 0):.1f}x | {vid.get('title')}")
-            c2.write(f"👁️ {vid.get('view_count', 0):,} vues | 👥 {vid.get('channel_follower_count', 0):,} abonnés")
-            c2.link_button("Ouvrir YouTube", vid.get('webpage_url'))
-            with st.expander("Voir les commentaires"):
-                for c in vid.get('comments', [])[:8]:
-                    st.write(f"💬 {c.get('text')}")
+        # --- AFFICHAGE DES RÉSULTATS ---
+        # Tri par ratio de viralité décroissant
+        final_results = sorted(final_results, key=lambda x: x.get('_ratio', 0), reverse=True)
+
+        if not final_results:
+            st.warning("Aucune vidéo ne correspond à vos filtres. Essayez de baisser le nombre de vues minimum.")
+        else:
+            st.success(f"Trouvé {len(final_results)} vidéos virales !")
+            
+            for vid in final_results:
+                with st.container(border=True):
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        st.image(vid.get('thumbnail'), use_container_width=True)
+                    with col2:
+                        st.subheader(f"{vid.get('_ratio', 0):.1f}x | {vid.get('title')}")
+                        st.write(f"👤 **Chaîne :** {vid.get('uploader')}")
+                        st.write(f"👁️ **Vues :** {vid.get('view_count', 0):,} | 👥 **Abos :** {vid.get('channel_follower_count', 0):,}")
+                        st.link_button("▶️ Voir la vidéo", vid.get('webpage_url'))
+                        
+                        with st.expander("Voir les meilleurs commentaires"):
+                            for c in vid.get('comments', [])[:5]:
+                                st.caption(f"💬 {c.get('text')[:300]}")
+
+else:
+    st.info("Configurez vos mots-clés dans la barre latérale et cliquez sur Lancer.")
