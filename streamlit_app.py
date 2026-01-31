@@ -6,7 +6,6 @@ from typing import Dict, List, Optional, Tuple, Set
 
 import streamlit as st
 
-# Google API (YouTube Data API v3)
 try:
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
@@ -16,6 +15,7 @@ except ModuleNotFoundError:
 
 st.set_page_config(page_title="YouTube Research", layout="wide", initial_sidebar_state="expanded")
 
+# ------- SETTINGS -------
 DEADLINE_SECONDS = 10.0
 MAX_PAGES = 5
 
@@ -35,13 +35,17 @@ LANGUAGE_CONFIG = {
 ISO_DURATION_RE = re.compile(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$")
 
 
+# =========================
+# CLIENT
+# =========================
+
 @st.cache_resource(show_spinner=False)
 def yt_client():
     if build is None:
-        raise RuntimeError("Dépendance manquante: google-api-python-client (ajoute-le dans requirements.txt)")
+        raise RuntimeError("Il manque google-api-python-client dans requirements.txt")
     api_key = st.secrets.get("YOUTUBE_API_KEY")
     if not api_key:
-        raise RuntimeError("Secret manquant: YOUTUBE_API_KEY (dans Streamlit Secrets)")
+        raise RuntimeError("Secret manquant: YOUTUBE_API_KEY")
     return build("youtube", "v3", developerKey=api_key)
 
 
@@ -51,9 +55,12 @@ def http_error_to_text(ex: Exception) -> str:
     return str(ex)
 
 
+# =========================
+# UTILS
+# =========================
+
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
-
 
 def rfc3339_to_dt(s: str) -> Optional[datetime]:
     if not s:
@@ -64,7 +71,6 @@ def rfc3339_to_dt(s: str) -> Optional[datetime]:
         return datetime.fromisoformat(s)
     except ValueError:
         return None
-
 
 def parse_iso8601_duration_to_seconds(d: str) -> int:
     if not d:
@@ -77,19 +83,17 @@ def parse_iso8601_duration_to_seconds(d: str) -> int:
     s = int(m.group(3) or 0)
     return h * 3600 + mi * 60 + s
 
-
 def normalize_text(s: str) -> str:
     s = (s or "").lower()
     s = s.replace(".", "")  # I.C.E -> ice
     s = re.sub(r"\s+", " ", s)
     return s.strip()
 
-
 def parse_and_tokens(query: str) -> List[str]:
     """
-    - "ice + trump" => ["ice","trump"]  (AND)
-    - "ice trump"   => ["ice","trump"]  (AND)
-    - '"donald trump" ice' => ["donald trump","ice"]
+    "ice + trump" => AND
+    "ice trump"   => AND
+    '"donald trump" ice' => phrase + mot
     """
     if not query:
         return []
@@ -105,23 +109,17 @@ def parse_and_tokens(query: str) -> List[str]:
     tokens = [*quoted, *parts]
     return [normalize_text(t) for t in tokens if t.strip()]
 
-
 def token_present(text: str, token: str) -> bool:
     t = normalize_text(text)
     tok = normalize_text(token)
-
     if not tok:
         return True
-
-    if " " in tok:  # phrase
+    if " " in tok:
         return tok in t
-
     return re.search(rf"\b{re.escape(tok)}\b", t) is not None
-
 
 def tokens_all_present(text: str, tokens: List[str]) -> bool:
     return all(token_present(text, tok) for tok in tokens)
-
 
 def passes_duration(seconds: int, min_duration: str) -> bool:
     if min_duration == "Toutes":
@@ -134,17 +132,12 @@ def passes_duration(seconds: int, min_duration: str) -> bool:
         return seconds >= 600
     return True
 
-
 def language_proof_ok(
     default_audio_language: Optional[str],
     default_language: Optional[str],
     target_code: Optional[str],
     require_proof: bool
 ) -> Tuple[bool, str]:
-    """
-    Preuve de langue = defaultAudioLanguage ou defaultLanguage
-    Si require_proof=True et aucune preuve => rejet
-    """
     if target_code is None:
         return True, "langue=auto"
 
@@ -163,7 +156,6 @@ def language_proof_ok(
         return False, "pas de preuve langue (audio/meta absents)"
     return True, "pas de preuve langue (accepté)"
 
-
 def stars_from_ratio(ratio: Optional[float]) -> str:
     if ratio is None:
         return "⭐"
@@ -176,7 +168,11 @@ def stars_from_ratio(ratio: Optional[float]) -> str:
     return "⭐"
 
 
-def api_search_video_ids(
+# =========================
+# API CALLS
+# =========================
+
+def api_search_video_ids_once(
     query: str,
     pages: int,
     per_page: int,
@@ -192,37 +188,45 @@ def api_search_video_ids(
     ids: List[str] = []
     page_token: Optional[str] = None
 
-    for _ in range(pages):
+    for p in range(pages):
         if time.monotonic() > deadline_t:
-            logs.append("[WARN] deadline atteinte pendant search.list")
+            logs.append("[WARN] deadline pendant search.list (stop)")
             break
+
+        params = {
+            "part": "id",
+            "q": q_for_api,
+            "type": "video",
+            "maxResults": per_page,
+            "pageToken": page_token,
+            "fields": "nextPageToken,items/id/videoId",
+        }
+        # ✅ Ajout seulement si pas None
+        if relevance_language:
+            params["relevanceLanguage"] = relevance_language
+        if region_code:
+            params["regionCode"] = region_code
+        if published_after:
+            params["publishedAfter"] = published_after.isoformat().replace("+00:00", "Z")
 
         try:
-            req = yt.search().list(
-                part="id",
-                q=q_for_api,
-                type="video",
-                maxResults=per_page,
-                pageToken=page_token,
-                relevanceLanguage=relevance_language,
-                regionCode=region_code,
-                publishedAfter=published_after.isoformat().replace("+00:00", "Z") if published_after else None,
-                fields="nextPageToken,items/id/videoId",
-            )
-            res = req.execute()
+            res = yt.search().list(**params).execute()
         except Exception as ex:
-            logs.append(f"[ERROR] search.list: {http_error_to_text(ex)}")
+            logs.append(f"[ERROR] search.list page {p+1}: {http_error_to_text(ex)}")
             break
 
-        for it in (res.get("items") or []):
+        items = res.get("items") or []
+        for it in items:
             vid = ((it.get("id") or {}).get("videoId"))
             if vid:
                 ids.append(vid)
 
         page_token = res.get("nextPageToken")
+        logs.append(f"[INFO] search page {p+1}: +{len(items)} (next={'YES' if page_token else 'NO'})")
         if not page_token:
             break
 
+    # unique
     seen: Set[str] = set()
     out: List[str] = []
     for vid in ids:
@@ -232,18 +236,57 @@ def api_search_video_ids(
     return out
 
 
+def api_search_video_ids(
+    query: str,
+    pages: int,
+    per_page: int,
+    relevance_language: Optional[str],
+    region_code: Optional[str],
+    published_after: Optional[datetime],
+    deadline_t: float,
+    logs: List[str],
+) -> List[str]:
+    # 1) tentative avec langue/region
+    ids = api_search_video_ids_once(
+        query=query,
+        pages=pages,
+        per_page=per_page,
+        relevance_language=relevance_language,
+        region_code=region_code,
+        published_after=published_after,
+        deadline_t=deadline_t,
+        logs=logs,
+    )
+
+    # 2) fallback si 0 (très important)
+    if not ids and (relevance_language or region_code):
+        logs.append("[WARN] 0 résultat avec langue/region -> retry sans langue/region")
+        ids = api_search_video_ids_once(
+            query=query,
+            pages=pages,
+            per_page=per_page,
+            relevance_language=None,
+            region_code=None,
+            published_after=published_after,
+            deadline_t=deadline_t,
+            logs=logs,
+        )
+
+    return ids
+
+
 def api_videos_list(video_ids: List[str], deadline_t: float, logs: List[str]) -> Dict[str, dict]:
     yt = yt_client()
     out: Dict[str, dict] = {}
 
     for i in range(0, len(video_ids), 50):
         if time.monotonic() > deadline_t:
-            logs.append("[WARN] deadline atteinte pendant videos.list")
+            logs.append("[WARN] deadline pendant videos.list")
             break
 
         chunk = video_ids[i:i+50]
         try:
-            req = yt.videos().list(
+            res = yt.videos().list(
                 part="snippet,statistics,contentDetails",
                 id=",".join(chunk),
                 fields=(
@@ -254,8 +297,7 @@ def api_videos_list(video_ids: List[str], deadline_t: float, logs: List[str]) ->
                     "contentDetails(duration)"
                     ")"
                 ),
-            )
-            res = req.execute()
+            ).execute()
         except Exception as ex:
             logs.append(f"[ERROR] videos.list: {http_error_to_text(ex)}")
             continue
@@ -272,17 +314,16 @@ def api_channels_list(channel_ids: List[str], deadline_t: float, logs: List[str]
 
     for i in range(0, len(channel_ids), 50):
         if time.monotonic() > deadline_t:
-            logs.append("[WARN] deadline atteinte pendant channels.list")
+            logs.append("[WARN] deadline pendant channels.list")
             break
 
         chunk = channel_ids[i:i+50]
         try:
-            req = yt.channels().list(
+            res = yt.channels().list(
                 part="statistics",
                 id=",".join(chunk),
                 fields="items(id,statistics(subscriberCount,hiddenSubscriberCount))",
-            )
-            res = req.execute()
+            ).execute()
         except Exception as ex:
             logs.append(f"[ERROR] channels.list: {http_error_to_text(ex)}")
             continue
@@ -296,20 +337,18 @@ def api_channels_list(channel_ids: List[str], deadline_t: float, logs: List[str]
 @st.cache_data(show_spinner=False, ttl=3600)
 def api_fetch_top_comments_20(video_id: str) -> List[str]:
     """
-    20 TOP commentaires = order='relevance' + maxResults=20
-    (Si commentaires désactivés => [])
+    20 “top” = order=relevance + 20 premiers
     """
     yt = yt_client()
     try:
-        req = yt.commentThreads().list(
+        res = yt.commentThreads().list(
             part="snippet",
             videoId=video_id,
             maxResults=20,
             order="relevance",
             textFormat="plainText",
             fields="items(snippet(topLevelComment(snippet(textDisplay))))",
-        )
-        res = req.execute()
+        ).execute()
     except Exception:
         return []
 
@@ -340,9 +379,12 @@ def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, 
             blocks.append("- (aucun commentaire)\n")
 
         blocks.append("\n")
-
     return "".join(blocks).strip()
 
+
+# =========================
+# UI
+# =========================
 
 def render_sidebar() -> dict:
     st.sidebar.title("🔍 YouTube Research")
@@ -357,7 +399,6 @@ def render_sidebar() -> dict:
 
     st.sidebar.divider()
     st.sidebar.header("🎯 Filtres")
-
     language = st.sidebar.selectbox("🌍 Langue", list(LANGUAGE_CONFIG.keys()), index=1)
     require_proof = st.sidebar.checkbox("✅ Exiger preuve langue (audio/meta)", value=True)
 
@@ -411,30 +452,25 @@ def render_video_card(v: dict, idx: int):
 
     with st.expander(header, expanded=(idx <= 3)):
         c1, c2 = st.columns([1, 2])
-
         with c1:
             if v.get("thumbnail"):
                 st.image(v["thumbnail"], use_container_width=True)
-
         with c2:
             st.markdown(f"**{v['title']}**")
             st.write(f"📺 {v['channel_title']}")
             st.write(f"🗣️ {v['lang_reason']}")
             st.write(f"🔎 Match: {v['matched_kw']}")
             st.write(f"👁️ {v['views']:,} vues")
-
             subs = v.get("subs")
             st.write(f"👥 abonnés: {subs:,}" if isinstance(subs, int) else "👥 abonnés: N/A")
-
             if isinstance(v.get("ratio"), (int, float)):
                 st.write(f"📊 Ratio vues/abonnés: **{v['ratio']:.2f}x**")
-
             st.link_button("▶️ YouTube", v["url"])
 
 
 def main():
     st.title("🚀 YouTube Research")
-    st.caption("À gauche: PROMPT + 20 TOP commentaires par vidéo (Ctrl+A). À droite: vidéos.")
+    st.caption("À gauche: prompt + 20 commentaires par vidéo (Ctrl+A). À droite: vidéos.")
 
     params = render_sidebar()
 
@@ -443,7 +479,7 @@ def main():
         return
 
     if not params["keywords"]:
-        st.error("❌ Mets au moins 1 mot-clé (une ligne).")
+        st.error("❌ Mets au moins 1 ligne de mots-clés.")
         return
 
     start_t = time.monotonic()
@@ -475,7 +511,7 @@ def main():
     video_sources: Dict[str, Set[str]] = {}
     all_ids: List[str] = []
 
-    # 1) SEARCH
+    # SEARCH
     for i, kw in enumerate(params["keywords"]):
         status.write(f"🔍 Recherche: {kw}")
         ids = api_search_video_ids(
@@ -488,6 +524,7 @@ def main():
             deadline_t=deadline_t,
             logs=logs,
         )
+        logs.append(f"[INFO] ids for '{kw}': {len(ids)}")
         for vid in ids:
             video_sources.setdefault(vid, set()).add(kw)
         all_ids.extend(ids)
@@ -500,20 +537,22 @@ def main():
         if vid not in seen:
             uniq_ids.append(vid)
             seen.add(vid)
+
     stats["ids_found"] = len(uniq_ids)
 
     if not uniq_ids:
-        status.update(label="❌ Aucun résultat", state="error")
-        st.text_area("Logs", value="\n".join(logs[-200:]), height=260)
+        status.update(label="❌ 0 vidéo trouvée", state="error")
+        st.error("YouTube n’a renvoyé aucun ID. Regarde les logs en bas.")
+        st.text_area("📜 Logs (dernier 200)", value="\n".join(logs[-200:]), height=280)
         return
 
-    # 2) VIDEOS META
+    # VIDEOS META
     status.update(label="📥 Métadonnées vidéos...", state="running")
     videos_map = api_videos_list(uniq_ids, deadline_t, logs)
     stats["videos_meta"] = len(videos_map)
     progress.progress(0.55)
 
-    # 3) CHANNELS META
+    # CHANNELS META
     channel_ids: List[str] = []
     for it in videos_map.values():
         ch = (it.get("snippet") or {}).get("channelId")
@@ -523,13 +562,13 @@ def main():
     channels_map = api_channels_list(channel_ids, deadline_t, logs)
     progress.progress(0.65)
 
-    # 4) FILTER + SCORE
+    # FILTER + SCORE
     status.update(label="🧪 Filtrage & scoring...", state="running")
     results: List[dict] = []
 
     for vid, it in videos_map.items():
         if time.monotonic() > deadline_t:
-            logs.append("[WARN] deadline atteinte pendant filtrage")
+            logs.append("[WARN] deadline pendant filtrage")
             break
 
         sn = it.get("snippet") or {}
@@ -620,8 +659,8 @@ def main():
 
     display = results[: params["max_display"]]
 
-    # 5) COMMENTS (20 TOP) for each displayed video
-    status.update(label="💬 Commentaires (top)...", state="running")
+    # COMMENTS
+    status.update(label="💬 Chargement commentaires (top)...", state="running")
     comments_by_video: Dict[str, List[str]] = {}
 
     for v in display:
@@ -637,9 +676,7 @@ def main():
     progress.progress(1.0)
     status.update(label=f"✅ {len(display)} vidéos affichées (validées total: {stats['passed_total']})", state="complete")
 
-    # UI
     left, right = st.columns([1, 2])
-
     with left:
         st.subheader("📝 PROMPT + 20 commentaires par vidéo (Ctrl+A)")
         st.text_area("Copie-colle", value=left_text, height=650)
@@ -657,15 +694,8 @@ def main():
     c3.metric("Commentaires chargés", stats["comments_loaded"])
     c4.metric("Ignorés (deadline)", stats["comments_skipped_deadline"])
 
-    st.subheader("🚫 Rejets")
-    r1, r2, r3, r4 = st.columns(4)
-    r1.metric("Keywords", stats["filtered_keywords"])
-    r2.metric("Vues", stats["filtered_views"])
-    r3.metric("Durée", stats["filtered_duration"])
-    r4.metric("Langue", stats["filtered_language"])
-
     st.subheader("📜 Logs (dernier 200)")
-    st.text_area("", value="\n".join(logs[-200:]), height=240)
+    st.text_area("", value="\n".join(logs[-200:]), height=260)
 
 
 if __name__ == "__main__":
