@@ -21,8 +21,9 @@ st.set_page_config(page_title="YouTube Research", layout="wide", initial_sidebar
 DEADLINE_SECONDS = 10.0
 MAX_PAGES = 5
 
-# ✅ PROMPT (1 SEULE FOIS)
-PROMPT_INTRO = """analyse moi ces commentaires et relève les points suivant : les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !
+# ✅ PROMPTS TRADUITS (1 SEULE FOIS)
+PROMPTS_BY_LANG = {
+    "fr": """analyse moi ces commentaires et relève les points suivant : les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !
 
 Les points que je te demande, doivent faire maximum 1 seule phrase ! pas + 1 seule !
 
@@ -44,7 +45,54 @@ Idée qui reviennent le plus souvent (3) :
 3) ...
 
 Voici les commentaires :
-"""
+""",
+    "en": """analyze these comments and extract the following: the ideas that come up the most often, propose 3 topics that would work based on the comments, and propose 3 related side-topics that could work based on the comments!
+
+each point must be MAX 1 sentence. no more than 1 sentence!
+
+you write:
+
+most repeated ideas (3) — 1 sentence per idea:
+1) ...
+2) ...
+3) ...
+
+topics that could work (3) — 1 sentence per topic:
+1) ...
+2) ...
+3) ...
+
+related side-topics (3) — 1 sentence per topic:
+1) ...
+2) ...
+3) ...
+
+here are the comments:
+""",
+    "es": """analiza estos comentarios y extrae lo siguiente: las ideas que más se repiten, propón 3 temas que podrían funcionar basándote en los comentarios, y propón 3 temas periféricos relacionados que también podrían funcionar basándote en los comentarios.
+
+cada punto debe ser MÁX 1 frase. ¡no más de 1 frase!
+
+escribes:
+
+ideas más repetidas (3) — 1 frase por idea:
+1) ...
+2) ...
+3) ...
+
+temas que podrían funcionar (3) — 1 frase por tema:
+1) ...
+2) ...
+3) ...
+
+temas periféricos (3) — 1 frase por tema:
+1) ...
+2) ...
+3) ...
+
+aquí están los comentarios:
+""",
+}
 
 LANGUAGE_CONFIG = {
     "Auto (no language filter)": {"code": None, "relevanceLanguage": None, "regionCode": None},
@@ -227,6 +275,14 @@ def language_ok_with_fallback(
     return True, "aucune preuve (accepté)"
 
 
+def prompt_for_lang(code: Optional[str]) -> str:
+    """
+    code = 'fr'/'en'/'es' ou None
+    Auto(None) => fr
+    """
+    return PROMPTS_BY_LANG.get(code or "fr", PROMPTS_BY_LANG["fr"])
+
+
 # =========================
 # API CALLS
 # =========================
@@ -394,13 +450,13 @@ def api_fetch_top_comments_20(video_id: str) -> List[str]:
 # =========================
 # BUILD LEFT WINDOW
 # =========================
-def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, List[str]]) -> str:
+def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, List[str]], prompt_text: str) -> str:
     """
     ✅ 1 SEUL PROMPT au début
     ✅ puis commentaires des vidéos (groupés par vidéo)
     """
     blocks: List[str] = []
-    blocks.append(PROMPT_INTRO.strip() + "\n\n")
+    blocks.append(prompt_text.strip() + "\n\n")
 
     for idx, v in enumerate(videos, 1):
         vid = v["video_id"]
@@ -552,6 +608,9 @@ def main():
     target_code = lang_cfg.get("code")
     rel_lang = lang_cfg.get("relevanceLanguage")
     region = lang_cfg.get("regionCode")
+
+    # ✅ Prompt auto selon la langue choisie
+    prompt_text = prompt_for_lang(target_code)
 
     status = st.status("Recherche...", expanded=True)
     progress = st.progress(0)
@@ -734,7 +793,7 @@ def main():
         comments_by_video[vid] = api_fetch_top_comments_20(vid)
         stats["comments_loaded"] += 1
 
-    left_text = build_prompt_plus_comments(display, comments_by_video)
+    left_text = build_prompt_plus_comments(display, comments_by_video, prompt_text)
 
     progress.progress(1.0)
     status.update(label=f"✅ {len(display)} vidéos affichées (validées total: {stats['passed_total']})", state="complete")
