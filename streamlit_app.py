@@ -22,28 +22,27 @@ DEADLINE_SECONDS = 10.0
 MAX_PAGES = 5
 
 # ✅ CHANGÉ ICI UNIQUEMENT
-PROMPT_INTRO = (
-    "analyse moi ces commentaires et relève les points suivant : les idées qui reviennet le plus souvent, "
-    "propose moi 3 sujets qui marcheront sur base des commentaire et propose moi 3 sujets périphérique "
-    "qui pourraient marcher par rapport aux commentaires !\n\n"
-    "Règles:\n"
-    "- 1 phrase maximum par ligne.\n"
-    "- Sois bref.\n\n"
-    "Idées qui reviennent le plus souvent (3):\n"
-    "1) ...\n"
-    "2) ...\n"
-    "3) ...\n\n"
-    "Sujets qui pourraient marcher (3):\n"
-    "1) ...\n"
-    "2) ...\n"
-    "3) ...\n\n"
-    "Sujets périphériques (3):\n"
-    "1) ...\n"
-    "2) ...\n"
-    "3) ...\n\n"
-    "Voici les commentaires :"
-)
+PROMPT_INTRO = """analyse moi ces commentaires et relève les points suivant : les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !
 
+Règles : 1 phrase MAX par ligne. Très court.
+
+Idées qui reviennent le plus souvent (3) :
+1) ...
+2) ...
+3) ...
+
+Sujets qui pourraient marcher (3) :
+1) ...
+2) ...
+3) ...
+
+Sujets périphériques (3) :
+1) ...
+2) ...
+3) ...
+
+Voici les commentaires (toutes les vidéos, mélangés) :
+"""
 LANGUAGE_CONFIG = {
     "Auto (no language filter)": {"code": None, "relevanceLanguage": None, "regionCode": None},
     "French":  {"code": "fr", "relevanceLanguage": "fr", "regionCode": "FR"},
