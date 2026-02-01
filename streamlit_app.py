@@ -22,9 +22,20 @@ DEADLINE_SECONDS = 10.0
 MAX_PAGES = 5
 
 PROMPT_INTRO = (
-    "analyse moi ces commentaires et relève les points suivant : "
-    "les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire "
-    "et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !"
+    "analyse moi ces commentaires et relève les points suivant : les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !
+
+Les points que je te demande, doivent faire maximum 1 seule phrase ! pas + 1 seule ! 
+
+Tu mets : 
+
+Idée qui reviennent le plus souvent, tu en mets 3, et une phrase par idée
+
+
+Tu met, 3 Sujets qui pourraient marcher, et ça aussi en 1 phrase par sujet ! 
+
+Tu met 3 sujets périphérique et ça pareil, 1 phrase par sujet ! les trucs trop long, sont chiant ! soit bref et conscis ! 
+
+Voici les commentaires ! "
 )
 
 LANGUAGE_CONFIG = {
