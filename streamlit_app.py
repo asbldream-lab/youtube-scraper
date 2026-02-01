@@ -21,28 +21,31 @@ st.set_page_config(page_title="YouTube Research", layout="wide", initial_sidebar
 DEADLINE_SECONDS = 10.0
 MAX_PAGES = 5
 
-# ✅ CHANGÉ ICI UNIQUEMENT
+# ✅ PROMPT (1 SEULE FOIS)
 PROMPT_INTRO = """analyse moi ces commentaires et relève les points suivant : les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !
 
-Règles : 1 phrase MAX par ligne. Très court.
+Les points que je te demande, doivent faire maximum 1 seule phrase ! pas + 1 seule !
 
-Idées qui reviennent le plus souvent (3) :
+Tu mets :
+
+Idée qui reviennent le plus souvent (3) :
 1) ...
 2) ...
 3) ...
 
-Sujets qui pourraient marcher (3) :
+3 Sujets qui pourraient marcher (3) :
 1) ...
 2) ...
 3) ...
 
-Sujets périphériques (3) :
+3 sujets périphérique (3) :
 1) ...
 2) ...
 3) ...
 
-Voici les commentaires (toutes les vidéos, mélangés) :
+Voici les commentaires :
 """
+
 LANGUAGE_CONFIG = {
     "Auto (no language filter)": {"code": None, "relevanceLanguage": None, "regionCode": None},
     "French":  {"code": "fr", "relevanceLanguage": "fr", "regionCode": "FR"},
@@ -256,7 +259,6 @@ def api_search_video_ids_once(
             "pageToken": page_token,
             "fields": "nextPageToken,items/id/videoId",
         }
-        # ✅ pas de None
         if relevance_language:
             params["relevanceLanguage"] = relevance_language
         if region_code:
@@ -281,7 +283,6 @@ def api_search_video_ids_once(
         if not page_token:
             break
 
-    # unique
     seen: Set[str] = set()
     out: List[str] = []
     for vid in ids:
@@ -302,7 +303,6 @@ def api_search_video_ids(
 ) -> List[str]:
     ids = api_search_video_ids_once(query, pages, per_page, relevance_language, region_code, published_after, deadline_t, logs)
 
-    # fallback si 0
     if not ids and (relevance_language or region_code):
         logs.append("[WARN] 0 résultat avec langue/region -> retry sans langue/region")
         ids = api_search_video_ids_once(query, pages, per_page, None, None, published_after, deadline_t, logs)
@@ -395,13 +395,18 @@ def api_fetch_top_comments_20(video_id: str) -> List[str]:
 # BUILD LEFT WINDOW
 # =========================
 def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, List[str]]) -> str:
+    """
+    ✅ 1 SEUL PROMPT au début
+    ✅ puis commentaires des vidéos (groupés par vidéo)
+    """
     blocks: List[str] = []
+    blocks.append(PROMPT_INTRO.strip() + "\n\n")
+
     for idx, v in enumerate(videos, 1):
         vid = v["video_id"]
         blocks.append(f"================ VIDEO {idx} ================\n")
         blocks.append(f"TITRE: {v['title']}\n")
         blocks.append(f"LIEN:  {v['url']}\n\n")
-        blocks.append(PROMPT_INTRO + "\n\n")
         blocks.append("COMMENTAIRES:\n")
 
         comments = comments_by_video.get(vid, [])
@@ -412,6 +417,7 @@ def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, 
             blocks.append("- (aucun commentaire)\n")
 
         blocks.append("\n")
+
     return "".join(blocks).strip()
 
 
@@ -504,9 +510,8 @@ def render_video_card(v: dict, idx: int):
 
 def main():
     st.title("🚀 YouTube Research")
-    st.caption("À gauche: ton prompt + 20 TOP commentaires par vidéo (Ctrl+A). À droite: vidéos.")
+    st.caption("À gauche: 1 prompt + 20 TOP commentaires par vidéo (Ctrl+A). À droite: vidéos.")
 
-    # ✅ Catch erreurs (clé / dépendance)
     try:
         _ = yt_client()
     except Exception as ex:
@@ -555,7 +560,6 @@ def main():
     video_sources: Dict[str, Set[str]] = {}
     all_ids: List[str] = []
 
-    # SEARCH
     for i, kw in enumerate(params["keywords"]):
         status.write(f"🔍 Recherche: {kw}")
         ids = api_search_video_ids(
@@ -574,7 +578,6 @@ def main():
         all_ids.extend(ids)
         progress.progress(min(0.25, (i + 1) / max(1, len(params["keywords"])) * 0.25))
 
-    # UNIQUE
     uniq_ids: List[str] = []
     seen: Set[str] = set()
     for vid in all_ids:
@@ -590,13 +593,11 @@ def main():
         st.text_area("Logs", value="\n".join(logs[-200:]), height=260)
         return
 
-    # VIDEOS META
     status.update(label="📥 Métadonnées vidéos...", state="running")
     videos_map = api_videos_list(uniq_ids, deadline_t, logs)
     stats["videos_meta"] = len(videos_map)
     progress.progress(0.55)
 
-    # CHANNELS META
     channel_ids: List[str] = []
     for it in videos_map.values():
         ch = (it.get("snippet") or {}).get("channelId")
@@ -606,7 +607,6 @@ def main():
     channels_map = api_channels_list(channel_ids, deadline_t, logs)
     progress.progress(0.65)
 
-    # FILTER + SCORE + COMMENTS
     status.update(label="🧪 Filtrage & scoring...", state="running")
     results: List[dict] = []
     comments_by_video: Dict[str, List[str]] = {}
@@ -625,7 +625,6 @@ def main():
         tags = sn.get("tags") or []
         combined = title if params["match_in"] == "Titre seulement" else f"{title}\n{desc}\n{' '.join(tags)}"
 
-        # keyword match (AND)
         matched_kw = None
         for kw in video_sources.get(vid, []):
             toks = kw_tokens.get(kw, [])
@@ -636,7 +635,6 @@ def main():
             stats["filtered_keywords"] += 1
             continue
 
-        # views
         try:
             views = int(stt.get("viewCount") or 0)
         except ValueError:
@@ -645,20 +643,17 @@ def main():
             stats["filtered_views"] += 1
             continue
 
-        # duration
         dur_s = parse_iso8601_duration_to_seconds(cd.get("duration", ""))
         if not passes_duration(dur_s, params["min_duration"]):
             stats["filtered_duration"] += 1
             continue
 
-        # date
         if params["date_limit"]:
             published_at = rfc3339_to_dt(sn.get("publishedAt", ""))
             if published_at and published_at < params["date_limit"]:
                 stats["filtered_date"] += 1
                 continue
 
-        # language (meta -> fallback comments)
         dal = sn.get("defaultAudioLanguage")
         dl = sn.get("defaultLanguage")
         comments_text_for_lang = ""
@@ -666,7 +661,6 @@ def main():
         need_comments_for_lang = (target_code is not None) and (not (dal or dl))
 
         if need_comments_for_lang:
-            # limite de checks (sinon trop lent)
             if stats["lang_comment_checks"] >= MAX_LANG_COMMENT_CHECKS:
                 comments_text_for_lang = ""
             elif time.monotonic() > deadline_t:
@@ -690,7 +684,6 @@ def main():
             stats["filtered_language"] += 1
             continue
 
-        # subs + ratio
         channel_id = sn.get("channelId")
         subs: Optional[int] = None
         if channel_id and channel_id in channels_map:
@@ -704,7 +697,6 @@ def main():
 
         ratio: Optional[float] = (views / subs) if (subs and subs > 0) else None
 
-        # thumb
         thumb = None
         thumbs = (sn.get("thumbnails") or {})
         for k in ("maxres", "standard", "high", "medium", "default"):
@@ -726,12 +718,10 @@ def main():
             "matched_kw": matched_kw,
         })
 
-    # sort
     results.sort(key=lambda v: (v["ratio"] is not None, v["ratio"] or 0, v["views"]), reverse=True)
     stats["passed_total"] = len(results)
     display = results[: params["max_display"]]
 
-    # COMMENTS for displayed videos
     status.update(label="💬 Commentaires (top)...", state="running")
     for v in display:
         vid = v["video_id"]
@@ -749,11 +739,10 @@ def main():
     progress.progress(1.0)
     status.update(label=f"✅ {len(display)} vidéos affichées (validées total: {stats['passed_total']})", state="complete")
 
-    # UI
     left, right = st.columns([1, 2])
 
     with left:
-        st.subheader("📝 PROMPT + 20 commentaires par vidéo (Ctrl+A)")
+        st.subheader("📝 PROMPT + commentaires (Ctrl+A)")
         st.text_area("Copie-colle", value=left_text, height=650)
         st.download_button("📥 Télécharger", data=left_text, file_name="prompt_commentaires.txt")
 
