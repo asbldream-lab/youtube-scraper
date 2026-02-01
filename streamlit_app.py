@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -21,78 +22,52 @@ st.set_page_config(page_title="YouTube Research", layout="wide", initial_sidebar
 DEADLINE_SECONDS = 10.0
 MAX_PAGES = 5
 
-# ✅ PROMPTS TRADUITS (1 SEULE FOIS)
-PROMPTS_BY_LANG = {
-    "fr": """analyse moi ces commentaires et relève les points suivant : les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !
-
-Les points que je te demande, doivent faire maximum 1 seule phrase ! pas + 1 seule !
-
-Tu mets :
-
-Idée qui reviennent le plus souvent (3) :
-1) ...
-2) ...
-3) ...
-
-3 Sujets qui pourraient marcher (3) :
-1) ...
-2) ...
-3) ...
-
-3 sujets périphérique (3) :
-1) ...
-2) ...
-3) ...
-
-Voici les commentaires :
-""",
-    "en": """analyze these comments and extract the following: the ideas that come up the most often, propose 3 topics that would work based on the comments, and propose 3 related side-topics that could work based on the comments!
-
-each point must be MAX 1 sentence. no more than 1 sentence!
-
-you write:
-
-most repeated ideas (3) — 1 sentence per idea:
-1) ...
-2) ...
-3) ...
-
-topics that could work (3) — 1 sentence per topic:
-1) ...
-2) ...
-3) ...
-
-related side-topics (3) — 1 sentence per topic:
-1) ...
-2) ...
-3) ...
-
-here are the comments:
-""",
-    "es": """analiza estos comentarios y extrae lo siguiente: las ideas que más se repiten, propón 3 temas que podrían funcionar basándote en los comentarios, y propón 3 temas periféricos relacionados que también podrían funcionar basándote en los comentarios.
-
-cada punto debe ser MÁX 1 frase. ¡no más de 1 frase!
-
-escribes:
-
-ideas más repetidas (3) — 1 frase por idea:
-1) ...
-2) ...
-3) ...
-
-temas que podrían funcionar (3) — 1 frase por tema:
-1) ...
-2) ...
-3) ...
-
-temas periféricos (3) — 1 frase por tema:
-1) ...
-2) ...
-3) ...
-
-aquí están los comentarios:
-""",
+# ✅ Prompt templates (auto selon la langue de recherche)
+PROMPT_TEMPLATES = {
+    "French": (
+        "analyse moi ces commentaires et relève les points suivant : les idées qui reviennet le plus souvent, "
+        "propose moi 3 sujets qui marcheront sur base des commentaire et propose moi 3 sujets périphérique "
+        "qui pourraient marcher par rapport aux commentaires !\n\n"
+        "Règles : 1 phrase MAX par ligne. Très court.\n\n"
+        "Idées qui reviennent le plus souvent (3) :\n"
+        "1) ...\n2) ...\n3) ...\n\n"
+        "Sujets qui pourraient marcher (3) :\n"
+        "1) ...\n2) ...\n3) ...\n\n"
+        "Sujets périphériques (3) :\n"
+        "1) ...\n2) ...\n3) ...\n\n"
+        "Voici les commentaires !\n"
+    ),
+    "English": (
+        "Analyze these comments and extract the following: the most recurring ideas, 3 topics that would perform based on the comments, "
+        "and 3 related/peripheral topics that could also perform.\n\n"
+        "Rules: MAX 1 sentence per line. Very short.\n\n"
+        "Most recurring ideas (3):\n"
+        "1) ...\n2) ...\n3) ...\n\n"
+        "Topics that could perform (3):\n"
+        "1) ...\n2) ...\n3) ...\n\n"
+        "Peripheral topics (3):\n"
+        "1) ...\n2) ...\n3) ...\n\n"
+        "Here are the comments!\n"
+    ),
+    "Spanish": (
+        "Analiza estos comentarios y extrae lo siguiente: las ideas que más se repiten, 3 temas que funcionarían basados en los comentarios, "
+        "y 3 temas relacionados/periféricos que también podrían funcionar.\n\n"
+        "Reglas: 1 frase MÁX por línea. Muy corto.\n\n"
+        "Ideas que más se repiten (3):\n"
+        "1) ...\n2) ...\n3) ...\n\n"
+        "Temas que podrían funcionar (3):\n"
+        "1) ...\n2) ...\n3) ...\n\n"
+        "Temas periféricos (3):\n"
+        "1) ...\n2) ...\n3) ...\n\n"
+        "¡Aquí están los comentarios!\n"
+    ),
 }
+
+def prompt_for_language(language_name: str) -> str:
+    if language_name == "Auto (no language filter)":
+        return PROMPT_TEMPLATES["French"]
+    return PROMPT_TEMPLATES.get(language_name, PROMPT_TEMPLATES["French"])
+
 
 LANGUAGE_CONFIG = {
     "Auto (no language filter)": {"code": None, "relevanceLanguage": None, "regionCode": None},
@@ -169,11 +144,6 @@ def normalize_text(s: str) -> str:
     return s.strip()
 
 def parse_and_tokens(query: str) -> List[str]:
-    """
-    "ice + trump" => AND
-    "ice trump"   => AND
-    '"donald trump" ice' => phrase + mot
-    """
     if not query:
         return []
     q = query.strip()
@@ -193,7 +163,7 @@ def token_present(text: str, token: str) -> bool:
     tok = normalize_text(token)
     if not tok:
         return True
-    if " " in tok:  # phrase
+    if " " in tok:
         return tok in t
     return re.search(rf"\b{re.escape(tok)}\b", t) is not None
 
@@ -223,10 +193,6 @@ def stars_from_ratio(ratio: Optional[float]) -> str:
     return "⭐"
 
 def detect_lang_from_text(text: str) -> Optional[str]:
-    """
-    Heuristique: compte mots fréquents.
-    Retourne 'fr'/'en'/'es' ou None.
-    """
     if not text or len(text) < 40:
         return None
     words = set(re.findall(r"\b[a-zàâäéèêëïîôùûüçñ]+\b", text.lower()))
@@ -246,12 +212,6 @@ def language_ok_with_fallback(
     comments_text: str,
     require_proof: bool,
 ) -> Tuple[bool, str]:
-    """
-    Ordre:
-    1) meta audio/lang si dispo
-    2) sinon comments détectés
-    3) sinon => si require_proof=True rejet, sinon accept
-    """
     if target_code is None:
         return True, "langue=auto"
 
@@ -275,12 +235,39 @@ def language_ok_with_fallback(
     return True, "aucune preuve (accepté)"
 
 
-def prompt_for_lang(code: Optional[str]) -> str:
+# =========================
+# ORDER-INVARIANT QUERY (FIX)
+# =========================
+def canonicalize_query_order_invariant(query: str) -> str:
     """
-    code = 'fr'/'en'/'es' ou None
-    Auto(None) => fr
+    Objectif: 'trump epstein' == 'epstein trump'
+    => On trie les tokens et on envoie TOUJOURS la même chaîne à l'API.
+
+    On ne touche pas si:
+    - OR (| ou ' OR ')
+    - NOT (-mot) (car ça change le sens)
     """
-    return PROMPTS_BY_LANG.get(code or "fr", PROMPTS_BY_LANG["fr"])
+    q_raw = query.replace("+", " ").strip()
+    if not q_raw:
+        return ""
+
+    # si OR ou NOT, on garde tel quel
+    if "|" in q_raw or re.search(r"\bOR\b", q_raw) or re.search(r"(^|\s)-\w+", q_raw):
+        return q_raw
+
+    # garder les phrases "..."
+    quoted = re.findall(r'"([^"]+)"', q_raw)
+    q_wo_quotes = re.sub(r'"[^"]+"', " ", q_raw)
+    parts = [p for p in re.split(r"\s+", q_wo_quotes) if p.strip()]
+
+    # petit plus: enlever les points dans les tokens (I.C.E -> ICE)
+    parts = [p.replace(".", "") for p in parts]
+    quoted_tokens = [f"\"{x.replace('.', '')}\"" for x in quoted]
+
+    tokens = [*quoted_tokens, *parts]
+    tokens = [t for t in tokens if t.strip()]
+    tokens.sort(key=lambda s: s.lower())
+    return " ".join(tokens)
 
 
 # =========================
@@ -335,7 +322,7 @@ def api_search_video_ids_once(
                 ids.append(vid)
 
         page_token = res.get("nextPageToken")
-        logs.append(f"[INFO] search page {p+1}: +{len(items)}")
+        logs.append(f"[INFO] search page {p+1}: +{len(items)} (q='{q_for_api[:60]}')")
         if not page_token:
             break
 
@@ -347,6 +334,7 @@ def api_search_video_ids_once(
             seen.add(vid)
     return out
 
+
 def api_search_video_ids(
     query: str,
     pages: int,
@@ -357,13 +345,20 @@ def api_search_video_ids(
     deadline_t: float,
     logs: List[str],
 ) -> List[str]:
-    ids = api_search_video_ids_once(query, pages, per_page, relevance_language, region_code, published_after, deadline_t, logs)
+    # ✅ FIX ICI: on canonicalise
+    canon_q = canonicalize_query_order_invariant(query)
+    if not canon_q:
+        return []
 
+    ids = api_search_video_ids_once(canon_q, pages, per_page, relevance_language, region_code, published_after, deadline_t, logs)
+
+    # fallback si 0
     if not ids and (relevance_language or region_code):
         logs.append("[WARN] 0 résultat avec langue/region -> retry sans langue/region")
-        ids = api_search_video_ids_once(query, pages, per_page, None, None, published_after, deadline_t, logs)
+        ids = api_search_video_ids_once(canon_q, pages, per_page, None, None, published_after, deadline_t, logs)
 
     return ids
+
 
 def api_videos_list(video_ids: List[str], deadline_t: float, logs: List[str]) -> Dict[str, dict]:
     yt = yt_client()
@@ -396,6 +391,7 @@ def api_videos_list(video_ids: List[str], deadline_t: float, logs: List[str]) ->
             out[it["id"]] = it
     return out
 
+
 def api_channels_list(channel_ids: List[str], deadline_t: float, logs: List[str]) -> Dict[str, dict]:
     yt = yt_client()
     out: Dict[str, dict] = {}
@@ -420,11 +416,9 @@ def api_channels_list(channel_ids: List[str], deadline_t: float, logs: List[str]
             out[it["id"]] = it
     return out
 
+
 @st.cache_data(show_spinner=False, ttl=3600)
 def api_fetch_top_comments_20(video_id: str) -> List[str]:
-    """
-    20 TOP = order=relevance + 20 premiers
-    """
     yt = yt_client()
     try:
         res = yt.commentThreads().list(
@@ -450,11 +444,11 @@ def api_fetch_top_comments_20(video_id: str) -> List[str]:
 # =========================
 # BUILD LEFT WINDOW
 # =========================
-def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, List[str]], prompt_text: str) -> str:
-    """
-    ✅ 1 SEUL PROMPT au début
-    ✅ puis commentaires des vidéos (groupés par vidéo)
-    """
+def build_prompt_plus_comments(
+    videos: List[dict],
+    comments_by_video: Dict[str, List[str]],
+    prompt_text: str,
+) -> str:
     blocks: List[str] = []
     blocks.append(prompt_text.strip() + "\n\n")
 
@@ -463,7 +457,7 @@ def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, 
         blocks.append(f"================ VIDEO {idx} ================\n")
         blocks.append(f"TITRE: {v['title']}\n")
         blocks.append(f"LIEN:  {v['url']}\n\n")
-        blocks.append("COMMENTAIRES:\n")
+        blocks.append("COMMENTAIRES (TOP 20):\n")
 
         comments = comments_by_video.get(vid, [])
         if comments:
@@ -473,7 +467,6 @@ def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, 
             blocks.append("- (aucun commentaire)\n")
 
         blocks.append("\n")
-
     return "".join(blocks).strip()
 
 
@@ -541,6 +534,7 @@ def render_sidebar() -> dict:
         "match_in": match_in,
     }
 
+
 def render_video_card(v: dict, idx: int):
     header = f"#{idx} {v['stars']} | {v['views']:,} vues"
     if isinstance(v.get("ratio"), (int, float)):
@@ -566,7 +560,7 @@ def render_video_card(v: dict, idx: int):
 
 def main():
     st.title("🚀 YouTube Research")
-    st.caption("À gauche: 1 prompt + 20 TOP commentaires par vidéo (Ctrl+A). À droite: vidéos.")
+    st.caption("À gauche: ton prompt + 20 TOP commentaires par vidéo (Ctrl+A). À droite: vidéos.")
 
     try:
         _ = yt_client()
@@ -576,6 +570,7 @@ def main():
         return
 
     params = render_sidebar()
+    prompt_text = prompt_for_language(params["language"])
 
     if not st.sidebar.button("🚀 LANCER", type="primary", use_container_width=True):
         st.info("Écris une requête puis clique LANCER.")
@@ -609,9 +604,6 @@ def main():
     rel_lang = lang_cfg.get("relevanceLanguage")
     region = lang_cfg.get("regionCode")
 
-    # ✅ Prompt auto selon la langue choisie
-    prompt_text = prompt_for_lang(target_code)
-
     status = st.status("Recherche...", expanded=True)
     progress = st.progress(0)
 
@@ -619,6 +611,7 @@ def main():
     video_sources: Dict[str, Set[str]] = {}
     all_ids: List[str] = []
 
+    # SEARCH
     for i, kw in enumerate(params["keywords"]):
         status.write(f"🔍 Recherche: {kw}")
         ids = api_search_video_ids(
@@ -637,6 +630,7 @@ def main():
         all_ids.extend(ids)
         progress.progress(min(0.25, (i + 1) / max(1, len(params["keywords"])) * 0.25))
 
+    # UNIQUE
     uniq_ids: List[str] = []
     seen: Set[str] = set()
     for vid in all_ids:
@@ -652,11 +646,13 @@ def main():
         st.text_area("Logs", value="\n".join(logs[-200:]), height=260)
         return
 
+    # VIDEOS META
     status.update(label="📥 Métadonnées vidéos...", state="running")
     videos_map = api_videos_list(uniq_ids, deadline_t, logs)
     stats["videos_meta"] = len(videos_map)
     progress.progress(0.55)
 
+    # CHANNELS META
     channel_ids: List[str] = []
     for it in videos_map.values():
         ch = (it.get("snippet") or {}).get("channelId")
@@ -666,6 +662,7 @@ def main():
     channels_map = api_channels_list(channel_ids, deadline_t, logs)
     progress.progress(0.65)
 
+    # FILTER + SCORE + COMMENTS
     status.update(label="🧪 Filtrage & scoring...", state="running")
     results: List[dict] = []
     comments_by_video: Dict[str, List[str]] = {}
@@ -684,6 +681,7 @@ def main():
         tags = sn.get("tags") or []
         combined = title if params["match_in"] == "Titre seulement" else f"{title}\n{desc}\n{' '.join(tags)}"
 
+        # keyword match (AND)
         matched_kw = None
         for kw in video_sources.get(vid, []):
             toks = kw_tokens.get(kw, [])
@@ -694,6 +692,7 @@ def main():
             stats["filtered_keywords"] += 1
             continue
 
+        # views
         try:
             views = int(stt.get("viewCount") or 0)
         except ValueError:
@@ -702,17 +701,20 @@ def main():
             stats["filtered_views"] += 1
             continue
 
+        # duration
         dur_s = parse_iso8601_duration_to_seconds(cd.get("duration", ""))
         if not passes_duration(dur_s, params["min_duration"]):
             stats["filtered_duration"] += 1
             continue
 
+        # date
         if params["date_limit"]:
             published_at = rfc3339_to_dt(sn.get("publishedAt", ""))
             if published_at and published_at < params["date_limit"]:
                 stats["filtered_date"] += 1
                 continue
 
+        # language (meta -> fallback comments)
         dal = sn.get("defaultAudioLanguage")
         dl = sn.get("defaultLanguage")
         comments_text_for_lang = ""
@@ -743,6 +745,7 @@ def main():
             stats["filtered_language"] += 1
             continue
 
+        # subs + ratio
         channel_id = sn.get("channelId")
         subs: Optional[int] = None
         if channel_id and channel_id in channels_map:
@@ -756,6 +759,7 @@ def main():
 
         ratio: Optional[float] = (views / subs) if (subs and subs > 0) else None
 
+        # thumb
         thumb = None
         thumbs = (sn.get("thumbnails") or {})
         for k in ("maxres", "standard", "high", "medium", "default"):
@@ -777,10 +781,12 @@ def main():
             "matched_kw": matched_kw,
         })
 
+    # sort
     results.sort(key=lambda v: (v["ratio"] is not None, v["ratio"] or 0, v["views"]), reverse=True)
     stats["passed_total"] = len(results)
     display = results[: params["max_display"]]
 
+    # COMMENTS for displayed videos
     status.update(label="💬 Commentaires (top)...", state="running")
     for v in display:
         vid = v["video_id"]
@@ -798,6 +804,7 @@ def main():
     progress.progress(1.0)
     status.update(label=f"✅ {len(display)} vidéos affichées (validées total: {stats['passed_total']})", state="complete")
 
+    # UI
     left, right = st.columns([1, 2])
 
     with left:
