@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import re
 import time
@@ -21,11 +22,28 @@ st.set_page_config(page_title="YouTube Research", layout="wide", initial_sidebar
 DEADLINE_SECONDS = 10.0
 MAX_PAGES = 5
 
-PROMPT_INTRO = (
-    "analyse moi ces commentaires et relève les points suivant : "
-    "les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire "
-    "et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !"
-)
+# ✅ SEUL CHANGEMENT : PROMPT INTRO (simple, sans caractères bizarres)
+PROMPT_INTRO = """analyse moi ces commentaires et relève les points suivant : les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !
+
+IMPORTANT : chaque point doit faire 1 seule phrase MAXIMUM.
+
+Idées qui reviennent le plus souvent :
+- Idee 1 (1 phrase)
+- Idee 2 (1 phrase)
+- Idee 3 (1 phrase)
+
+3 sujets qui pourraient marcher :
+- Sujet 1 (1 phrase)
+- Sujet 2 (1 phrase)
+- Sujet 3 (1 phrase)
+
+3 sujets périphériques :
+- Sujet 1 (1 phrase)
+- Sujet 2 (1 phrase)
+- Sujet 3 (1 phrase)
+
+Voici les commentaires :
+"""
 
 LANGUAGE_CONFIG = {
     "Auto (no language filter)": {"code": None, "relevanceLanguage": None, "regionCode": None},
@@ -385,7 +403,7 @@ def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, 
         blocks.append(f"================ VIDEO {idx} ================\n")
         blocks.append(f"TITRE: {v['title']}\n")
         blocks.append(f"LIEN:  {v['url']}\n\n")
-        blocks.append(PROMPT_INTRO + "\n\n")
+        blocks.append(PROMPT_INTRO + "\n")
         blocks.append("COMMENTAIRES:\n")
 
         comments = comments_by_video.get(vid, [])
@@ -419,7 +437,7 @@ def render_sidebar() -> dict:
     language = st.sidebar.selectbox("🌍 Langue", list(LANGUAGE_CONFIG.keys()), index=1)
 
     require_proof = st.sidebar.checkbox("✅ Exiger preuve langue", value=True)
-    st.sidebar.caption("Preuve = meta audio/lang. Si absent → on tente via commentaires.")
+    st.sidebar.caption("Preuve = meta audio/lang. Si absent -> on tente via commentaires.")
 
     min_views = st.sidebar.number_input("👁️ Vues minimum", value=100000, step=10000, min_value=0)
     min_duration = st.sidebar.selectbox("⏱️ Durée minimum", ["Toutes", "2 min", "5 min", "10 min"])
