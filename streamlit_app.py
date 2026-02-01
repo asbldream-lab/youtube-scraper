@@ -15,7 +15,9 @@ except ModuleNotFoundError:
 
 st.set_page_config(page_title="YouTube Research", layout="wide", initial_sidebar_state="expanded")
 
-# ------- SETTINGS -------
+# ----------------------
+# SETTINGS
+# ----------------------
 DEADLINE_SECONDS = 10.0
 MAX_PAGES = 5
 
@@ -32,20 +34,31 @@ LANGUAGE_CONFIG = {
     "Spanish": {"code": "es", "relevanceLanguage": "es", "regionCode": "ES"},
 }
 
+# Heuristique langue (fallback via commentaires)
+LANG_MARKERS = {
+    "fr": {"le","la","les","de","du","des","un","une","et","est","sont","dans","pour","sur","avec","qui","que","ce","cette",
+           "nous","vous","je","tu","il","elle","mais","plus","très","pas","comme","ça","cest"},
+    "en": {"the","and","is","are","was","were","have","has","been","this","that","with","for","not","you","they","but","what",
+           "when","your","will","would"},
+    "es": {"el","la","los","las","de","en","que","es","un","una","por","con","para","como","más","pero","sus","este","son"},
+}
+
 ISO_DURATION_RE = re.compile(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$")
+
+# Max de checks langue via commentaires (pour tenir 10s)
+MAX_LANG_COMMENT_CHECKS = 30
 
 
 # =========================
 # CLIENT
 # =========================
-
 @st.cache_resource(show_spinner=False)
 def yt_client():
     if build is None:
-        raise RuntimeError("Il manque google-api-python-client dans requirements.txt")
+        raise RuntimeError("Dépendance manquante: google-api-python-client (ajoute-le dans requirements.txt)")
     api_key = st.secrets.get("YOUTUBE_API_KEY")
     if not api_key:
-        raise RuntimeError("Secret manquant: YOUTUBE_API_KEY")
+        raise RuntimeError("Secret manquant: YOUTUBE_API_KEY (Streamlit Secrets)")
     return build("youtube", "v3", developerKey=api_key)
 
 
@@ -58,7 +71,6 @@ def http_error_to_text(ex: Exception) -> str:
 # =========================
 # UTILS
 # =========================
-
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -114,7 +126,7 @@ def token_present(text: str, token: str) -> bool:
     tok = normalize_text(token)
     if not tok:
         return True
-    if " " in tok:
+    if " " in tok:  # phrase
         return tok in t
     return re.search(rf"\b{re.escape(tok)}\b", t) is not None
 
@@ -132,30 +144,6 @@ def passes_duration(seconds: int, min_duration: str) -> bool:
         return seconds >= 600
     return True
 
-def language_proof_ok(
-    default_audio_language: Optional[str],
-    default_language: Optional[str],
-    target_code: Optional[str],
-    require_proof: bool
-) -> Tuple[bool, str]:
-    if target_code is None:
-        return True, "langue=auto"
-
-    dal = (default_audio_language or "").strip().lower()
-    dl = (default_language or "").strip().lower()
-
-    def matches(code: str) -> bool:
-        return code == target_code or code.startswith(target_code + "-")
-
-    if dal:
-        return (matches(dal), f"defaultAudioLanguage={dal}")
-    if dl:
-        return (matches(dl), f"defaultLanguage={dl}")
-
-    if require_proof:
-        return False, "pas de preuve langue (audio/meta absents)"
-    return True, "pas de preuve langue (accepté)"
-
 def stars_from_ratio(ratio: Optional[float]) -> str:
     if ratio is None:
         return "⭐"
@@ -167,11 +155,62 @@ def stars_from_ratio(ratio: Optional[float]) -> str:
         return "⭐⭐"
     return "⭐"
 
+def detect_lang_from_text(text: str) -> Optional[str]:
+    """
+    Heuristique: compte mots fréquents.
+    Retourne 'fr'/'en'/'es' ou None.
+    """
+    if not text or len(text) < 40:
+        return None
+    words = set(re.findall(r"\b[a-zàâäéèêëïîôùûüçñ]+\b", text.lower()))
+    best_lang = None
+    best_score = 0
+    for lang, markers in LANG_MARKERS.items():
+        score = len(words & markers)
+        if score > best_score:
+            best_score = score
+            best_lang = lang
+    return best_lang if best_score >= 3 else None
+
+def language_ok_with_fallback(
+    target_code: Optional[str],
+    default_audio_language: Optional[str],
+    default_language: Optional[str],
+    comments_text: str,
+    require_proof: bool,
+) -> Tuple[bool, str]:
+    """
+    Ordre:
+    1) meta audio/lang si dispo
+    2) sinon comments détectés
+    3) sinon => si require_proof=True rejet, sinon accept
+    """
+    if target_code is None:
+        return True, "langue=auto"
+
+    dal = (default_audio_language or "").strip().lower()
+    dl = (default_language or "").strip().lower()
+
+    def matches(code: str) -> bool:
+        return code == target_code or code.startswith(target_code + "-")
+
+    if dal:
+        return (matches(dal), f"meta audio={dal}")
+    if dl:
+        return (matches(dl), f"meta lang={dl}")
+
+    detected = detect_lang_from_text(comments_text)
+    if detected:
+        return (detected == target_code, f"comments détecté={detected}")
+
+    if require_proof:
+        return False, "aucune preuve (meta vide + comments indétectable)"
+    return True, "aucune preuve (accepté)"
+
 
 # =========================
 # API CALLS
 # =========================
-
 def api_search_video_ids_once(
     query: str,
     pages: int,
@@ -190,7 +229,7 @@ def api_search_video_ids_once(
 
     for p in range(pages):
         if time.monotonic() > deadline_t:
-            logs.append("[WARN] deadline pendant search.list (stop)")
+            logs.append("[WARN] deadline pendant search.list")
             break
 
         params = {
@@ -201,7 +240,7 @@ def api_search_video_ids_once(
             "pageToken": page_token,
             "fields": "nextPageToken,items/id/videoId",
         }
-        # ✅ Ajout seulement si pas None
+        # ✅ pas de None
         if relevance_language:
             params["relevanceLanguage"] = relevance_language
         if region_code:
@@ -222,7 +261,7 @@ def api_search_video_ids_once(
                 ids.append(vid)
 
         page_token = res.get("nextPageToken")
-        logs.append(f"[INFO] search page {p+1}: +{len(items)} (next={'YES' if page_token else 'NO'})")
+        logs.append(f"[INFO] search page {p+1}: +{len(items)}")
         if not page_token:
             break
 
@@ -235,7 +274,6 @@ def api_search_video_ids_once(
             seen.add(vid)
     return out
 
-
 def api_search_video_ids(
     query: str,
     pages: int,
@@ -246,34 +284,14 @@ def api_search_video_ids(
     deadline_t: float,
     logs: List[str],
 ) -> List[str]:
-    # 1) tentative avec langue/region
-    ids = api_search_video_ids_once(
-        query=query,
-        pages=pages,
-        per_page=per_page,
-        relevance_language=relevance_language,
-        region_code=region_code,
-        published_after=published_after,
-        deadline_t=deadline_t,
-        logs=logs,
-    )
+    ids = api_search_video_ids_once(query, pages, per_page, relevance_language, region_code, published_after, deadline_t, logs)
 
-    # 2) fallback si 0 (très important)
+    # fallback si 0
     if not ids and (relevance_language or region_code):
         logs.append("[WARN] 0 résultat avec langue/region -> retry sans langue/region")
-        ids = api_search_video_ids_once(
-            query=query,
-            pages=pages,
-            per_page=per_page,
-            relevance_language=None,
-            region_code=None,
-            published_after=published_after,
-            deadline_t=deadline_t,
-            logs=logs,
-        )
+        ids = api_search_video_ids_once(query, pages, per_page, None, None, published_after, deadline_t, logs)
 
     return ids
-
 
 def api_videos_list(video_ids: List[str], deadline_t: float, logs: List[str]) -> Dict[str, dict]:
     yt = yt_client()
@@ -304,9 +322,7 @@ def api_videos_list(video_ids: List[str], deadline_t: float, logs: List[str]) ->
 
         for it in (res.get("items") or []):
             out[it["id"]] = it
-
     return out
-
 
 def api_channels_list(channel_ids: List[str], deadline_t: float, logs: List[str]) -> Dict[str, dict]:
     yt = yt_client()
@@ -330,14 +346,12 @@ def api_channels_list(channel_ids: List[str], deadline_t: float, logs: List[str]
 
         for it in (res.get("items") or []):
             out[it["id"]] = it
-
     return out
-
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def api_fetch_top_comments_20(video_id: str) -> List[str]:
     """
-    20 “top” = order=relevance + 20 premiers
+    20 TOP = order=relevance + 20 premiers
     """
     yt = yt_client()
     try:
@@ -361,6 +375,9 @@ def api_fetch_top_comments_20(video_id: str) -> List[str]:
     return out
 
 
+# =========================
+# BUILD LEFT WINDOW
+# =========================
 def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, List[str]]) -> str:
     blocks: List[str] = []
     for idx, v in enumerate(videos, 1):
@@ -385,7 +402,6 @@ def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, 
 # =========================
 # UI
 # =========================
-
 def render_sidebar() -> dict:
     st.sidebar.title("🔍 YouTube Research")
 
@@ -399,8 +415,11 @@ def render_sidebar() -> dict:
 
     st.sidebar.divider()
     st.sidebar.header("🎯 Filtres")
+
     language = st.sidebar.selectbox("🌍 Langue", list(LANGUAGE_CONFIG.keys()), index=1)
-    require_proof = st.sidebar.checkbox("✅ Exiger preuve langue (audio/meta)", value=True)
+
+    require_proof = st.sidebar.checkbox("✅ Exiger preuve langue", value=True)
+    st.sidebar.caption("Preuve = meta audio/lang. Si absent → on tente via commentaires.")
 
     min_views = st.sidebar.number_input("👁️ Vues minimum", value=100000, step=10000, min_value=0)
     min_duration = st.sidebar.selectbox("⏱️ Durée minimum", ["Toutes", "2 min", "5 min", "10 min"])
@@ -418,13 +437,13 @@ def render_sidebar() -> dict:
 
     st.sidebar.divider()
     st.sidebar.header("📄 Pages")
-    pages = st.sidebar.slider("Pages (max 5)", 1, MAX_PAGES, 2)
+    pages = st.sidebar.slider("Pages (max 5)", 1, MAX_PAGES, 5)
     per_page = st.sidebar.slider("Résultats/page", 10, 50, 50, step=10)
 
     st.sidebar.divider()
     st.sidebar.header("⚡ Vitesse")
     hard_deadline = st.sidebar.checkbox("⏱️ Couper si > 10s", value=True)
-    max_display = st.sidebar.slider("Max vidéos affichées", 3, 30, 10)
+    max_display = st.sidebar.slider("Max vidéos affichées", 3, 30, 15)
 
     st.sidebar.divider()
     st.sidebar.header("🔎 Matching")
@@ -443,7 +462,6 @@ def render_sidebar() -> dict:
         "max_display": max_display,
         "match_in": match_in,
     }
-
 
 def render_video_card(v: dict, idx: int):
     header = f"#{idx} {v['stars']} | {v['views']:,} vues"
@@ -470,7 +488,15 @@ def render_video_card(v: dict, idx: int):
 
 def main():
     st.title("🚀 YouTube Research")
-    st.caption("À gauche: prompt + 20 commentaires par vidéo (Ctrl+A). À droite: vidéos.")
+    st.caption("À gauche: ton prompt + 20 TOP commentaires par vidéo (Ctrl+A). À droite: vidéos.")
+
+    # ✅ Catch erreurs (clé / dépendance)
+    try:
+        _ = yt_client()
+    except Exception as ex:
+        st.error(str(ex))
+        st.info("Vérifie: requirements.txt + Streamlit Secrets.")
+        return
 
     params = render_sidebar()
 
@@ -495,8 +521,10 @@ def main():
         "filtered_date": 0,
         "filtered_language": 0,
         "passed_total": 0,
+        "comments_used_for_lang": 0,
         "comments_loaded": 0,
         "comments_skipped_deadline": 0,
+        "lang_comment_checks": 0,
     }
 
     lang_cfg = LANGUAGE_CONFIG.get(params["language"], {})
@@ -524,7 +552,7 @@ def main():
             deadline_t=deadline_t,
             logs=logs,
         )
-        logs.append(f"[INFO] ids for '{kw}': {len(ids)}")
+        logs.append(f"[INFO] ids '{kw}': {len(ids)}")
         for vid in ids:
             video_sources.setdefault(vid, set()).add(kw)
         all_ids.extend(ids)
@@ -542,8 +570,8 @@ def main():
 
     if not uniq_ids:
         status.update(label="❌ 0 vidéo trouvée", state="error")
-        st.error("YouTube n’a renvoyé aucun ID. Regarde les logs en bas.")
-        st.text_area("📜 Logs (dernier 200)", value="\n".join(logs[-200:]), height=280)
+        st.error("Aucun ID renvoyé par YouTube. Regarde les logs.")
+        st.text_area("Logs", value="\n".join(logs[-200:]), height=260)
         return
 
     # VIDEOS META
@@ -562,9 +590,10 @@ def main():
     channels_map = api_channels_list(channel_ids, deadline_t, logs)
     progress.progress(0.65)
 
-    # FILTER + SCORE
+    # FILTER + SCORE + COMMENTS
     status.update(label="🧪 Filtrage & scoring...", state="running")
     results: List[dict] = []
+    comments_by_video: Dict[str, List[str]] = {}
 
     for vid, it in videos_map.items():
         if time.monotonic() > deadline_t:
@@ -578,9 +607,9 @@ def main():
         title = sn.get("title", "") or ""
         desc = sn.get("description", "") or ""
         tags = sn.get("tags") or []
-
         combined = title if params["match_in"] == "Titre seulement" else f"{title}\n{desc}\n{' '.join(tags)}"
 
+        # keyword match (AND)
         matched_kw = None
         for kw in video_sources.get(vid, []):
             toks = kw_tokens.get(kw, [])
@@ -591,6 +620,7 @@ def main():
             stats["filtered_keywords"] += 1
             continue
 
+        # views
         try:
             views = int(stt.get("viewCount") or 0)
         except ValueError:
@@ -599,27 +629,52 @@ def main():
             stats["filtered_views"] += 1
             continue
 
+        # duration
         dur_s = parse_iso8601_duration_to_seconds(cd.get("duration", ""))
         if not passes_duration(dur_s, params["min_duration"]):
             stats["filtered_duration"] += 1
             continue
 
+        # date
         if params["date_limit"]:
             published_at = rfc3339_to_dt(sn.get("publishedAt", ""))
             if published_at and published_at < params["date_limit"]:
                 stats["filtered_date"] += 1
                 continue
 
-        ok_lang, reason = language_proof_ok(
-            default_audio_language=sn.get("defaultAudioLanguage"),
-            default_language=sn.get("defaultLanguage"),
+        # language (meta -> fallback comments)
+        dal = sn.get("defaultAudioLanguage")
+        dl = sn.get("defaultLanguage")
+        comments_text_for_lang = ""
+
+        need_comments_for_lang = (target_code is not None) and (not (dal or dl))
+
+        if need_comments_for_lang:
+            # limite de checks (sinon trop lent)
+            if stats["lang_comment_checks"] >= MAX_LANG_COMMENT_CHECKS:
+                comments_text_for_lang = ""
+            elif time.monotonic() > deadline_t:
+                stats["comments_skipped_deadline"] += 1
+                comments_text_for_lang = ""
+            else:
+                stats["lang_comment_checks"] += 1
+                comms = api_fetch_top_comments_20(vid)
+                comments_by_video[vid] = comms
+                stats["comments_used_for_lang"] += 1
+                comments_text_for_lang = " ".join(comms)[:2000]
+
+        ok_lang, reason = language_ok_with_fallback(
             target_code=target_code,
+            default_audio_language=dal,
+            default_language=dl,
+            comments_text=comments_text_for_lang,
             require_proof=params["require_proof"],
         )
         if not ok_lang:
             stats["filtered_language"] += 1
             continue
 
+        # subs + ratio
         channel_id = sn.get("channelId")
         subs: Optional[int] = None
         if channel_id and channel_id in channels_map:
@@ -633,6 +688,7 @@ def main():
 
         ratio: Optional[float] = (views / subs) if (subs and subs > 0) else None
 
+        # thumb
         thumb = None
         thumbs = (sn.get("thumbnails") or {})
         for k in ("maxres", "standard", "high", "medium", "default"):
@@ -654,21 +710,22 @@ def main():
             "matched_kw": matched_kw,
         })
 
+    # sort
     results.sort(key=lambda v: (v["ratio"] is not None, v["ratio"] or 0, v["views"]), reverse=True)
     stats["passed_total"] = len(results)
-
     display = results[: params["max_display"]]
 
-    # COMMENTS
-    status.update(label="💬 Chargement commentaires (top)...", state="running")
-    comments_by_video: Dict[str, List[str]] = {}
-
+    # COMMENTS for displayed videos
+    status.update(label="💬 Commentaires (top)...", state="running")
     for v in display:
+        vid = v["video_id"]
+        if vid in comments_by_video:
+            continue
         if time.monotonic() > deadline_t:
             stats["comments_skipped_deadline"] += 1
-            comments_by_video[v["video_id"]] = ["(Commentaires non chargés: limite temps atteinte)"]
+            comments_by_video[vid] = ["(Commentaires non chargés: limite temps atteinte)"]
             continue
-        comments_by_video[v["video_id"]] = api_fetch_top_comments_20(v["video_id"])
+        comments_by_video[vid] = api_fetch_top_comments_20(vid)
         stats["comments_loaded"] += 1
 
     left_text = build_prompt_plus_comments(display, comments_by_video)
@@ -676,7 +733,9 @@ def main():
     progress.progress(1.0)
     status.update(label=f"✅ {len(display)} vidéos affichées (validées total: {stats['passed_total']})", state="complete")
 
+    # UI
     left, right = st.columns([1, 2])
+
     with left:
         st.subheader("📝 PROMPT + 20 commentaires par vidéo (Ctrl+A)")
         st.text_area("Copie-colle", value=left_text, height=650)
@@ -688,11 +747,24 @@ def main():
             render_video_card(v, idx)
 
     st.divider()
+    st.subheader("🔬 Diagnostic")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("IDs trouvés", stats["ids_found"])
-    c2.metric("Validées (total)", stats["passed_total"])
-    c3.metric("Commentaires chargés", stats["comments_loaded"])
-    c4.metric("Ignorés (deadline)", stats["comments_skipped_deadline"])
+    c2.metric("Meta vidéos", stats["videos_meta"])
+    c3.metric("Validées", stats["passed_total"])
+    c4.metric("Affichées", len(display))
+
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Rejet keywords", stats["filtered_keywords"])
+    r2.metric("Rejet vues", stats["filtered_views"])
+    r3.metric("Rejet durée", stats["filtered_duration"])
+    r4.metric("Rejet date", stats["filtered_date"])
+
+    l1, l2, l3, l4 = st.columns(4)
+    l1.metric("Rejet langue", stats["filtered_language"])
+    l2.metric("Comments langue", stats["comments_used_for_lang"])
+    l3.metric("Checks comments langue", stats["lang_comment_checks"])
+    l4.metric("Skip deadline", stats["comments_skipped_deadline"])
 
     st.subheader("📜 Logs (dernier 200)")
     st.text_area("", value="\n".join(logs[-200:]), height=260)
