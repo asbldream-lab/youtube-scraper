@@ -240,7 +240,6 @@ def api_search_video_ids_once(
             "pageToken": page_token,
             "fields": "nextPageToken,items/id/videoId",
         }
-        # ✅ pas de None
         if relevance_language:
             params["relevanceLanguage"] = relevance_language
         if region_code:
@@ -265,7 +264,6 @@ def api_search_video_ids_once(
         if not page_token:
             break
 
-    # unique
     seen: Set[str] = set()
     out: List[str] = []
     for vid in ids:
@@ -286,7 +284,6 @@ def api_search_video_ids(
 ) -> List[str]:
     ids = api_search_video_ids_once(query, pages, per_page, relevance_language, region_code, published_after, deadline_t, logs)
 
-    # fallback si 0
     if not ids and (relevance_language or region_code):
         logs.append("[WARN] 0 résultat avec langue/region -> retry sans langue/region")
         ids = api_search_video_ids_once(query, pages, per_page, None, None, published_after, deadline_t, logs)
@@ -376,16 +373,25 @@ def api_fetch_top_comments_20(video_id: str) -> List[str]:
 
 
 # =========================
-# BUILD LEFT WINDOW
+# BUILD LEFT WINDOW (PROMPT ONCE ✅)
 # =========================
 def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, List[str]]) -> str:
+    """
+    ✅ Prompt écrit UNE SEULE FOIS.
+    Ensuite: commentaires groupés par vidéo.
+    """
+    if not videos:
+        return PROMPT_INTRO + "\n\nAucune vidéo."
+
     blocks: List[str] = []
+    blocks.append(PROMPT_INTRO.strip() + "\n\n")
+    blocks.append("Voici les commentaires (top 20) classés par vidéo :\n\n")
+
     for idx, v in enumerate(videos, 1):
         vid = v["video_id"]
         blocks.append(f"================ VIDEO {idx} ================\n")
         blocks.append(f"TITRE: {v['title']}\n")
-        blocks.append(f"LIEN:  {v['url']}\n\n")
-        blocks.append(PROMPT_INTRO + "\n\n")
+        blocks.append(f"LIEN:  {v['url']}\n")
         blocks.append("COMMENTAIRES:\n")
 
         comments = comments_by_video.get(vid, [])
@@ -396,6 +402,7 @@ def build_prompt_plus_comments(videos: List[dict], comments_by_video: Dict[str, 
             blocks.append("- (aucun commentaire)\n")
 
         blocks.append("\n")
+
     return "".join(blocks).strip()
 
 
@@ -488,9 +495,8 @@ def render_video_card(v: dict, idx: int):
 
 def main():
     st.title("🚀 YouTube Research")
-    st.caption("À gauche: ton prompt + 20 TOP commentaires par vidéo (Ctrl+A). À droite: vidéos.")
+    st.caption("À gauche: 1 seul prompt + 20 TOP commentaires par vidéo (Ctrl+A). À droite: vidéos.")
 
-    # ✅ Catch erreurs (clé / dépendance)
     try:
         _ = yt_client()
     except Exception as ex:
@@ -650,7 +656,6 @@ def main():
         need_comments_for_lang = (target_code is not None) and (not (dal or dl))
 
         if need_comments_for_lang:
-            # limite de checks (sinon trop lent)
             if stats["lang_comment_checks"] >= MAX_LANG_COMMENT_CHECKS:
                 comments_text_for_lang = ""
             elif time.monotonic() > deadline_t:
@@ -737,7 +742,7 @@ def main():
     left, right = st.columns([1, 2])
 
     with left:
-        st.subheader("📝 PROMPT + 20 commentaires par vidéo (Ctrl+A)")
+        st.subheader("📝 PROMPT (1x) + 20 commentaires par vidéo (Ctrl+A)")
         st.text_area("Copie-colle", value=left_text, height=650)
         st.download_button("📥 Télécharger", data=left_text, file_name="prompt_commentaires.txt")
 
