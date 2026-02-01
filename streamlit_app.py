@@ -21,13 +21,10 @@ st.set_page_config(page_title="YouTube Research", layout="wide", initial_sidebar
 DEADLINE_SECONDS = 10.0
 MAX_PAGES = 5
 
-# ✅ SEUL CHANGEMENT : prompt ultra court, 1 phrase par item max
 PROMPT_INTRO = (
-    "Analyse ces commentaires et réponds très brièvement : "
-    "Idées qui reviennent le plus souvent (3) — 1 phrase par idée; "
-    "Sujets qui pourraient marcher (3) — 1 phrase par sujet; "
-    "Sujets périphériques (3) — 1 phrase par sujet; "
-    "pas d’intro, pas d’explications longues."
+    "analyse moi ces commentaires et relève les points suivant : "
+    "les idées qui reviennet le plus souvent, propose moi 3 sujets qui marcheront sur base des commentaire "
+    "et propose moi 3 sujets périphérique qui pourraient marcher par rapport aux commentaires !"
 )
 
 LANGUAGE_CONFIG = {
