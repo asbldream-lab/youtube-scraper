@@ -1,6 +1,8 @@
 from __future__ import annotations
 import re
 import time
+import json
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple, Set
 
@@ -14,6 +16,48 @@ except ModuleNotFoundError:
     HttpError = Exception
 
 st.set_page_config(page_title="YouTube Research", layout="wide", initial_sidebar_state="expanded")
+
+# ----------------------
+# GESTIONNAIRE DE QUOTA (AJOUTÉ)
+# ----------------------
+QUOTA_FILE = "quota_usage.json"
+DAILY_LIMIT = 10000  # Limite standard gratuite YouTube (Unités par jour)
+
+def load_quota():
+    """Charge le quota utilisé aujourd'hui depuis un fichier local."""
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if os.path.exists(QUOTA_FILE):
+        try:
+            with open(QUOTA_FILE, "r") as f:
+                data = json.load(f)
+                # On remet à 0 si c'est une nouvelle journée
+                if data.get("date") == today_str:
+                    return data.get("used", 0)
+        except:
+            pass
+    return 0
+
+def save_quota(used):
+    """Sauvegarde le nouveau total dans le fichier."""
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    try:
+        with open(QUOTA_FILE, "w") as f:
+            json.dump({"date": today_str, "used": used}, f)
+    except Exception:
+        pass # Pas grave si on rate une sauvegarde locale
+
+def add_quota_cost(cost):
+    """Ajoute un coût au compteur et met à jour l'affichage."""
+    if "quota_used" not in st.session_state:
+        st.session_state.quota_used = load_quota()
+    
+    st.session_state.quota_used += cost
+    save_quota(st.session_state.quota_used)
+
+# Initialisation au lancement du script
+if "quota_used" not in st.session_state:
+    st.session_state.quota_used = load_quota()
+
 
 # ----------------------
 # SETTINGS
@@ -308,7 +352,7 @@ def build_stable_api_query(raw_query: str) -> str:
 
 
 # =========================
-# API CALLS
+# API CALLS (AVEC COMPTEUR DE COÛT)
 # =========================
 def api_search_video_ids_once(
     query: str,
@@ -329,6 +373,9 @@ def api_search_video_ids_once(
     page_token: Optional[str] = None
 
     for p in range(pages):
+        # 💰 COÛT: Search = 100 unités par page
+        add_quota_cost(100)
+
         if time.monotonic() > deadline_t:
             logs.append("[WARN] deadline pendant search.list")
             break
@@ -342,12 +389,10 @@ def api_search_video_ids_once(
             "fields": "nextPageToken,items/id/videoId",
         }
 
-        # ✅ FIX 2: si période (publishedAfter) -> on trie par date (pour choper les vidéos très récentes)
+        # ✅ FIX 2: si période (publishedAfter) -> on trie par date
         if published_after:
             params["order"] = "date"
-        # sinon, on laisse relevance (par défaut)
-        # (ne pas mettre order="relevance" partout = même comportement que YouTube par défaut)
-
+        
         if relevance_language:
             params["relevanceLanguage"] = relevance_language
         if region_code:
@@ -405,6 +450,9 @@ def api_videos_list(video_ids: List[str], deadline_t: float, logs: List[str]) ->
     out: Dict[str, dict] = {}
 
     for i in range(0, len(video_ids), 50):
+        # 💰 COÛT: Videos List = 1 unité par appel
+        add_quota_cost(1)
+
         if time.monotonic() > deadline_t:
             logs.append("[WARN] deadline pendant videos.list")
             break
@@ -436,6 +484,9 @@ def api_channels_list(channel_ids: List[str], deadline_t: float, logs: List[str]
     out: Dict[str, dict] = {}
 
     for i in range(0, len(channel_ids), 50):
+        # 💰 COÛT: Channels List = 1 unité par appel
+        add_quota_cost(1)
+
         if time.monotonic() > deadline_t:
             logs.append("[WARN] deadline pendant channels.list")
             break
@@ -461,6 +512,11 @@ def api_fetch_top_comments_20(video_id: str) -> List[str]:
     20 TOP = order=relevance + 20 premiers
     """
     yt = yt_client()
+    
+    # 💰 COÛT: CommentThreads = 1 unité par appel
+    # Placé ici pour ne compter QUE si la fonction n'est pas en cache
+    add_quota_cost(1)
+
     try:
         res = yt.commentThreads().list(
             part="snippet",
@@ -519,6 +575,22 @@ def build_prompt_plus_comments(
 # =========================
 def render_sidebar() -> dict:
     st.sidebar.title("🔍 YouTube Research")
+
+    # ----- NOUVEAU: BARRE DE QUOTA -----
+    usage = st.session_state.get("quota_used", 0)
+    
+    # Calcul pourcentage (plafond à 100% pour éviter erreur d'affichage)
+    pct = min(1.0, usage / DAILY_LIMIT)
+    
+    # Affichage
+    st.sidebar.metric("📊 Quota utilisé (Est.)", f"{usage} / {DAILY_LIMIT}")
+    st.sidebar.progress(pct)
+    
+    if usage > 9000:
+        st.sidebar.warning("⚠️ Attention: Quota presque atteint !")
+    
+    st.sidebar.divider()
+    # -----------------------------------
 
     st.sidebar.header("📝 Mots-clés")
     keywords_text = st.sidebar.text_area(
